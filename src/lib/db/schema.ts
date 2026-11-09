@@ -1,4 +1,6 @@
 import {
+  boolean,
+  doublePrecision,
   integer,
   jsonb,
   pgTable,
@@ -64,6 +66,32 @@ export const signatureEvent = pgTable("signature_event", {
     .defaultNow(),
 });
 
+/**
+ * A fillable field placed on a document: a signature, date, initials, or text
+ * box at a position on a page. Positions are PDF points with a bottom-left
+ * origin (matching pdf-lib), so a detected position stamps where it was found.
+ */
+export const field = pgTable("field", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  documentId: uuid("document_id")
+    .notNull()
+    .references(() => document.id, { onDelete: "cascade" }),
+  /** signature | date | initials | text */
+  type: text("type").notNull(),
+  /** 1-based page number */
+  page: integer("page").notNull(),
+  x: doublePrecision("x").notNull(),
+  y: doublePrecision("y").notNull(),
+  width: doublePrecision("width").notNull(),
+  height: doublePrecision("height").notNull(),
+  required: boolean("required").notNull().default(true),
+  /** how the field was placed: detected | manual */
+  source: text("source").notNull().default("detected"),
+  /** value stamped at sign time (typed signature, date string), null until then */
+  value: text("value"),
+});
+
 export type Document = typeof document.$inferSelect;
+export type Field = typeof field.$inferSelect;
 export type Signer = typeof signer.$inferSelect;
 export type SignatureEventRow = typeof signatureEvent.$inferSelect;
