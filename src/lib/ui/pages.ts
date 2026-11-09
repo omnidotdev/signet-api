@@ -1,25 +1,47 @@
+// Sigil design tokens (semantic colors, radii, type scale) from
+// @omnidotdev/sigil-tokens, inlined as CSS custom properties. This service
+// renders plain HTML (no Tailwind build), so the token values are mirrored here
+// rather than imported. The accent is Sigil's citrine scale, the fabric-realm
+// amber Signet shares with its sibling products. Dark mode follows the viewer's
+// prefers-color-scheme using Sigil's dark palette
 const STYLE = `
-  :root { color-scheme: light dark; --accent: #b45309; --bg: #faf7f2; --fg: #1c1917; --card: #fff; --border: #e7e2da; --muted: #78716c; --field: #fff; --fieldBorder: #d6cfc4; }
+  :root {
+    color-scheme: light dark;
+    --bg-canvas: #fdfdfd; --bg-default: #ffffff; --bg-subtle: #fafafa; --bg-muted: #f5f5f5;
+    --fg-default: #0a0a0a; --fg-muted: #525252; --fg-subtle: #737373;
+    --accent: #be6221; --accent-emphasized: #9e461f; --accent-fg: #ffffff;
+    --border-muted: #a3a3a3; --border-subtle: #e5e5e5;
+    --surface: var(--bg-default);
+    --radius-lg: 0.5rem; --radius-xl: 0.75rem; --radius-2xl: 1rem; --radius-full: 9999px;
+  }
   @media (prefers-color-scheme: dark) {
-    :root { --bg: #1c1917; --fg: #f5f5f4; --card: #292524; --border: #44403c; --muted: #a8a29e; --field: #1c1917; --fieldBorder: #57534e; }
+    :root {
+      --bg-canvas: #0a0a0a; --bg-default: #0a0a0a; --bg-subtle: #262626; --bg-muted: #262626;
+      --fg-default: #ffffff; --fg-muted: #d4d4d4; --fg-subtle: #a3a3a3;
+      --accent: #dfa040; --accent-emphasized: #d78129; --accent-fg: #0a0a0a;
+      --border-muted: #737373; --border-subtle: #404040;
+      --surface: var(--bg-subtle);
+    }
   }
   * { box-sizing: border-box; }
-  body { margin: 0; font: 15px/1.5 system-ui, sans-serif; background: var(--bg); color: var(--fg); }
+  body { margin: 0; font: 0.9375rem/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; background: var(--bg-canvas); color: var(--fg-default); }
   main { max-width: 600px; margin: 0 auto; padding: 48px 20px; }
-  h1 { font-size: 28px; margin: 0 0 4px; }
-  h2 { font-size: 17px; margin: 32px 0 12px; }
-  p.sub { margin: 0 0 8px; color: var(--muted); }
-  .card { background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 24px; margin-top: 16px; }
+  h1 { font-size: 1.875rem; font-weight: 600; letter-spacing: -0.02em; margin: 0 0 4px; }
+  h2 { font-size: 1.125rem; font-weight: 600; margin: 32px 0 12px; }
+  p.sub { margin: 0 0 8px; color: var(--fg-subtle); }
+  .card { background: var(--surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-2xl); padding: 24px; margin-top: 16px; }
   form { display: grid; gap: 16px; }
-  label { font-weight: 600; font-size: 13px; display: block; margin-bottom: 6px; }
-  input[type=text], input[type=email], input[type=file] { width: 100%; padding: 10px 12px; border: 1px solid var(--fieldBorder); border-radius: 9px; background: var(--field); font: inherit; color: var(--fg); }
-  button { padding: 12px 16px; border: 0; border-radius: 9px; background: var(--accent); color: #fff; font: inherit; font-weight: 600; cursor: pointer; }
+  label { font-weight: 500; font-size: 0.8125rem; display: block; margin-bottom: 6px; color: var(--fg-muted); }
+  input[type=text], input[type=email], input[type=file] { width: 100%; padding: 10px 12px; border: 1px solid var(--border-muted); border-radius: var(--radius-lg); background: var(--bg-default); font: inherit; color: var(--fg-default); }
+  input:focus-visible, button:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  button { padding: 12px 16px; border: 0; border-radius: var(--radius-lg); background: var(--accent); color: var(--accent-fg); font: inherit; font-weight: 600; cursor: pointer; transition: background 0.15s ease; }
+  button:hover:not(:disabled) { background: var(--accent-emphasized); }
   button.ghost { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
   button:disabled { opacity: .6; cursor: default; }
   a { color: var(--accent); }
-  .note { font-size: 12px; color: var(--muted); margin-top: 8px; }
-  .share { font-family: ui-monospace, monospace; font-size: 13px; word-break: break-all; background: var(--bg); border: 1px solid var(--border); border-radius: 9px; padding: 10px 12px; margin-top: 8px; }
-  .pill { display: inline-block; font-size: 12px; font-weight: 600; padding: 2px 10px; border-radius: 999px; background: var(--accent); color: #fff; }
+  .note { font-size: 0.75rem; color: var(--fg-subtle); margin-top: 8px; }
+  .share { font-family: ui-monospace, "SFMono-Regular", monospace; font-size: 0.8125rem; word-break: break-all; background: var(--bg-muted); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); padding: 10px 12px; margin-top: 8px; }
+  .pill { display: inline-block; font-size: 0.75rem; font-weight: 600; padding: 2px 10px; border-radius: var(--radius-full); background: var(--accent); color: var(--accent-fg); }
 `;
 
 /** Wrap page body in the shared document shell */
