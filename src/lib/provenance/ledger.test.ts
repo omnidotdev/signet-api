@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { type ProvenanceEvent, appendEvent, verifyLedger } from "./ledger.ts";
+import type { ProvenanceEvent } from "./ledger.ts";
+import { appendEvent, verifyLedger } from "./ledger.ts";
 
 const buildChain = (): ProvenanceEvent[] => {
   let chain: ProvenanceEvent[] = [];
@@ -21,9 +22,11 @@ describe("provenance ledger", () => {
     const chain = buildChain();
 
     expect(chain).toHaveLength(2);
-    expect(chain[0].index).toBe(0);
-    expect(chain[1].prevHash).toBe(chain[0].hash);
-    expect(chain[0].hash).not.toBe(chain[1].hash);
+    const [first, second] = chain;
+    if (!first || !second) throw new Error("expected two events");
+    expect(first.index).toBe(0);
+    expect(second.prevHash).toBe(first.hash);
+    expect(first.hash).not.toBe(second.hash);
   });
 
   test("verifies an untampered chain", () => {
@@ -37,7 +40,9 @@ describe("provenance ledger", () => {
     const chain = buildChain();
     // mutate the signed-content data without recomputing downstream hashes
     const tampered = structuredClone(chain);
-    tampered[1].data.signer = "attacker@evil.test";
+    const target = tampered[1];
+    if (!target) throw new Error("expected two events");
+    target.data.signer = "attacker@evil.test";
 
     const result = verifyLedger(tampered);
 
@@ -48,7 +53,9 @@ describe("provenance ledger", () => {
   test("detects a broken chain link", () => {
     const chain = buildChain();
     const tampered = structuredClone(chain);
-    tampered[1].prevHash = "f".repeat(64);
+    const target = tampered[1];
+    if (!target) throw new Error("expected two events");
+    target.prevHash = "f".repeat(64);
 
     const result = verifyLedger(tampered);
 

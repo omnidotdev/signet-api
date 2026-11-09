@@ -3,10 +3,8 @@ import { createTestDb } from "../../test/testDb.ts";
 import type { Db } from "../db/client.ts";
 import { inspectPdfSignature } from "../signing/pdfSigner.ts";
 import { createSampleDocument } from "../signing/sampleDocument.ts";
-import {
-  generateSelfSignedPkcs12,
-  type ServiceSigner,
-} from "../signing/signerIdentity.ts";
+import type { ServiceSigner } from "../signing/signerIdentity.ts";
+import { generateSelfSignedPkcs12 } from "../signing/signerIdentity.ts";
 import {
   createSigningRequest,
   getSignedPdf,

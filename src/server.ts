@@ -21,7 +21,9 @@ const hasDb = Boolean(process.env.DATABASE_URL);
 if (hasDb) {
   await runMigrations();
 } else {
-  console.warn("DATABASE_URL not set, send-for-signature disabled (quick-sign still works)");
+  console.warn(
+    "DATABASE_URL not set, send-for-signature disabled (quick-sign still works)",
+  );
 }
 
 const html = (markup: string) =>
@@ -36,7 +38,11 @@ const pdfResponse = (bytes: Uint8Array, filename: string) =>
 
 const app = new Elysia()
   .get("/", () => html(landingPage()))
-  .get("/health", () => ({ status: "ok", signer: signer.commonName, db: hasDb }))
+  .get("/health", () => ({
+    status: "ok",
+    signer: signer.commonName,
+    db: hasDb,
+  }))
   // stateless quick-sign
   .post(
     "/api/sign",
@@ -150,7 +156,9 @@ if (hasDb) {
 
 app.listen(port);
 
-console.log(`Signet listening on ${baseUrl}`);
+console.info(`Signet listening on ${baseUrl}`);
 if (signer.ephemeral) {
-  console.warn("signing with an ephemeral identity, signatures will show an unknown issuer");
+  console.warn(
+    "signing with an ephemeral identity, signatures will show an unknown issuer",
+  );
 }

@@ -3,19 +3,18 @@ import { and, asc, eq } from "drizzle-orm";
 import type { Db } from "../db/client.ts";
 import { document, signatureEvent, signer } from "../db/schema.ts";
 import { generateToken } from "../db/tokens.ts";
-import {
-  type ProvenanceEvent,
-  appendEvent,
-  verifyLedger,
-} from "../provenance/ledger.ts";
+import type { ProvenanceEvent } from "../provenance/ledger.ts";
+import { appendEvent, verifyLedger } from "../provenance/ledger.ts";
 import { signPdf } from "../signing/pdfSigner.ts";
 import type { ServiceSigner } from "../signing/signerIdentity.ts";
 
 const sha256 = (bytes: Uint8Array): string =>
   createHash("sha256").update(bytes).digest("hex");
 
-const toBase64 = (bytes: Uint8Array): string => Buffer.from(bytes).toString("base64");
-const fromBase64 = (b64: string): Uint8Array => Uint8Array.from(Buffer.from(b64, "base64"));
+const toBase64 = (bytes: Uint8Array): string =>
+  Buffer.from(bytes).toString("base64");
+const fromBase64 = (b64: string): Uint8Array =>
+  Uint8Array.from(Buffer.from(b64, "base64"));
 
 /**
  * Append a provenance event to a document's chain and persist it.

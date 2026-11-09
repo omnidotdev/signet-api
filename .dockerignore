@@ -3,3 +3,11 @@ node_modules
 *.log
 src/scripts
 **/*.test.ts
+src/test
+biome.jsonc
+knip.config.ts
+drizzle.config.ts
+.husky
+.changeset
+.github
+.playwright-mcp

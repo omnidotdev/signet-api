@@ -80,11 +80,10 @@ export interface PdfSignatureInfo {
   hasSignature: boolean;
 }
 
-const BYTE_RANGE_PATTERN = /\/ByteRange\s*\[\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s*\]/;
+const BYTE_RANGE_PATTERN =
+  /\/ByteRange\s*\[\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s*\]/;
 
-const extractCommonName = (
-  cert: forge.pki.Certificate,
-): string | undefined => {
+const extractCommonName = (cert: forge.pki.Certificate): string | undefined => {
   const field = cert.subject.getField("CN");
   return field?.value as string | undefined;
 };
@@ -109,11 +108,27 @@ export const inspectPdfSignature = (pdf: Uint8Array): PdfSignatureInfo => {
     };
   }
 
-  const byteRange = byteRangeMatch.slice(1, 5).map(Number);
+  const [rangeStart, sigStart, sigEnd, rangeEnd] = byteRangeMatch
+    .slice(1, 5)
+    .map(Number);
+  if (
+    rangeStart === undefined ||
+    sigStart === undefined ||
+    sigEnd === undefined ||
+    rangeEnd === undefined
+  ) {
+    return {
+      byteRange: [],
+      certificateCommonNames: [],
+      signerCommonName: undefined,
+      hasSignature: false,
+    };
+  }
+  const byteRange = [rangeStart, sigStart, sigEnd, rangeEnd];
 
   // the signature bytes live as hex between the two ByteRange gaps
-  const contentsStart = byteRange[0] + byteRange[1] + 1;
-  const contentsEnd = byteRange[2] - 1;
+  const contentsStart = rangeStart + sigStart + 1;
+  const contentsEnd = sigEnd - 1;
   const hex = raw.slice(contentsStart, contentsEnd).replace(/0+$/, "");
   const normalizedHex = hex.length % 2 === 0 ? hex : hex.slice(0, -1);
 
@@ -128,7 +143,9 @@ export const inspectPdfSignature = (pdf: Uint8Array): PdfSignatureInfo => {
 
   const der = forge.util.hexToBytes(normalizedHex);
   const asn1 = forge.asn1.fromDer(der);
-  const message = forge.pkcs7.messageFromAsn1(asn1) as forge.pkcs7.PkcsSignedData;
+  const message = forge.pkcs7.messageFromAsn1(
+    asn1,
+  ) as forge.pkcs7.PkcsSignedData;
 
   const certificates = message.certificates ?? [];
   const certificateCommonNames = certificates
