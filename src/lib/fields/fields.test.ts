@@ -67,13 +67,26 @@ describe("field stamping", () => {
     const pdf = await anchorPdf();
     // manual fields keep this assertion independent of PDF parsing
     const fields = [
-      { type: "signature", page: 1, x: 130, y: 200, width: 150, height: 12 },
-      { type: "date", page: 1, x: 110, y: 170, width: 100, height: 12 },
+      {
+        type: "signature",
+        page: 1,
+        x: 130,
+        y: 200,
+        width: 150,
+        height: 12,
+        value: "Ada Lovelace",
+      },
+      {
+        type: "date",
+        page: 1,
+        x: 110,
+        y: 170,
+        width: 100,
+        height: 12,
+        value: "2026-11-09",
+      },
     ];
-    const stamped = await stampFields(pdf, fields, {
-      signature: "Ada Lovelace",
-      date: "2026-11-09",
-    });
+    const stamped = await stampFields(pdf, fields);
     expect(stamped.length).toBeGreaterThan(pdf.length);
     const text = await extractText(stamped);
     expect(text).toContain("Ada Lovelace");
@@ -82,10 +95,7 @@ describe("field stamping", () => {
 
   test("is a no-op when there are no fields", async () => {
     const pdf = await anchorPdf();
-    const out = await stampFields(pdf, [], {
-      signature: "x",
-      date: "y",
-    });
+    const out = await stampFields(pdf, []);
     expect(out).toBe(pdf);
   });
 });

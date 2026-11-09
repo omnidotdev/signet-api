@@ -1,3 +1,4 @@
+import { createRequire } from "node:module";
 import { Elysia, t } from "elysia";
 import { loadAuthConfig } from "./lib/auth/config.ts";
 import {
@@ -14,19 +15,24 @@ import {
 } from "./lib/auth/session.ts";
 import { getDb, runMigrations } from "./lib/db/client.ts";
 import {
+  createDraft,
   createSigningRequest,
+  getEditorData,
   getSignedPdf,
   getSignedPdfForOwner,
   getSignedPdfForSignToken,
   getSignerView,
   getStatus,
   listDocumentsByOwner,
+  saveFields,
+  sendDraft,
   signByToken,
   voidDocument,
 } from "./lib/documents/documentService.ts";
 import { sendSignatureRequestEmail } from "./lib/email/signatureRequestEmail.ts";
 import { signPdf } from "./lib/signing/pdfSigner.ts";
 import { loadServiceSigner } from "./lib/signing/signerIdentity.ts";
+import { editorPage } from "./lib/ui/editorPage.ts";
 import {
   authBar,
   dashboardPage,
@@ -34,6 +40,18 @@ import {
   notFoundPage,
   signerPage,
 } from "./lib/ui/pages.ts";
+
+// pdf.js browser build, served to the editor from the service (no CDN)
+const requireFile = createRequire(import.meta.url);
+const PDFJS_MAIN = requireFile.resolve("pdfjs-dist/build/pdf.min.mjs");
+const PDFJS_WORKER = requireFile.resolve("pdfjs-dist/build/pdf.worker.min.mjs");
+const js = (path: string) =>
+  new Response(Bun.file(path), {
+    headers: {
+      "content-type": "text/javascript; charset=utf-8",
+      "cache-control": "public, max-age=3600",
+    },
+  });
 
 const signer = loadServiceSigner();
 const port = Number(process.env.PORT ?? 3000);
@@ -92,6 +110,9 @@ const app = new Elysia()
     db: hasDb,
     auth: authEnabled,
   }))
+  // pdf.js assets for the editor
+  .get("/assets/pdf/pdf.min.mjs", () => js(PDFJS_MAIN))
+  .get("/assets/pdf/pdf.worker.min.mjs", () => js(PDFJS_WORKER))
   // stateless quick-sign
   .post(
     "/api/sign",
@@ -227,6 +248,111 @@ if (hasDb) {
         }),
       },
     )
+    // create a draft for the field-placement editor (one or more signers)
+    .post(
+      "/api/drafts",
+      async ({ body, session, set }) => {
+        const pdf = new Uint8Array(await body.file.arrayBuffer());
+        const documentName = body.name || body.file.name || "Document";
+        let signers: { name: string; email?: string }[] = [];
+        try {
+          const parsed = JSON.parse(body.signers) as {
+            name?: string;
+            email?: string;
+          }[];
+          signers = parsed
+            .filter((s) => s.name?.trim())
+            .map((s) => ({
+              name: s.name as string,
+              email: s.email || undefined,
+            }));
+        } catch {
+          signers = [];
+        }
+        if (signers.length === 0) {
+          set.status = 400;
+          return { error: "at_least_one_signer" };
+        }
+        const draft = await createDraft(db, {
+          name: documentName,
+          pdf,
+          signers,
+          ownerId: session?.sub,
+          ownerEmail: session?.email,
+        });
+        set.status = 201;
+        return {
+          id: draft.id,
+          editUrl: `${baseUrl}/d/${draft.id}/edit?token=${draft.manageToken}`,
+        };
+      },
+      {
+        body: t.Object({
+          file: t.File({ type: "application/pdf" }),
+          name: t.Optional(t.String()),
+          signers: t.String(),
+        }),
+      },
+    )
+    // the field-placement editor
+    .get("/d/:id/edit", async ({ params, query }) => {
+      const data = await getEditorData(db, params.id, query.token ?? "");
+      if (!data) return html(notFoundPage());
+      return html(editorPage(data, query.token ?? ""));
+    })
+    // save the editor's field set
+    .post(
+      "/d/:id/fields",
+      async ({ params, query, body, set }) => {
+        const ok = await saveFields(
+          db,
+          params.id,
+          query.token ?? "",
+          body.fields,
+        );
+        if (!ok) {
+          set.status = 404;
+          return { ok: false };
+        }
+        return { ok: true };
+      },
+      {
+        body: t.Object({
+          fields: t.Array(
+            t.Object({
+              signerId: t.Union([t.String(), t.Null()]),
+              type: t.String(),
+              page: t.Integer(),
+              x: t.Number(),
+              y: t.Number(),
+              width: t.Number(),
+              height: t.Number(),
+            }),
+          ),
+        }),
+      },
+    )
+    // send a draft: mark sent and email each signer their link
+    .post("/d/:id/send", async ({ params, query, set }) => {
+      const result = await sendDraft(db, params.id, query.token ?? "");
+      if (!result) {
+        set.status = 404;
+        return { ok: false };
+      }
+      const signers = result.signers.map((s) => {
+        const signUrl = `${baseUrl}/sign/${s.signToken}`;
+        if (s.email) {
+          void sendSignatureRequestEmail({
+            to: s.email,
+            signerName: s.name,
+            documentName: "a document",
+            signUrl,
+          });
+        }
+        return { name: s.name, signUrl };
+      });
+      return { ok: true, signers };
+    })
     // signer-facing page
     .get("/sign/:token", async ({ params }) => {
       const view = await getSignerView(db, params.token);
