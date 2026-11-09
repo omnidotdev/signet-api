@@ -9,6 +9,7 @@ import {
   signByToken,
   voidDocument,
 } from "./lib/documents/documentService.ts";
+import { sendSignatureRequestEmail } from "./lib/email/signatureRequestEmail.ts";
 import { signPdf } from "./lib/signing/pdfSigner.ts";
 import { loadServiceSigner } from "./lib/signing/signerIdentity.ts";
 import { landingPage, notFoundPage, signerPage } from "./lib/ui/pages.ts";
@@ -72,16 +73,26 @@ if (hasDb) {
       "/api/documents",
       async ({ body, set }) => {
         const pdf = new Uint8Array(await body.file.arrayBuffer());
+        const documentName = body.name || body.file.name || "Document";
         const req = await createSigningRequest(db, {
-          name: body.name || body.file.name || "Document",
+          name: documentName,
           pdf,
           signerName: body.signerName,
           signerEmail: body.signerEmail,
         });
+        const signUrl = `${baseUrl}/sign/${req.signToken}`;
+        if (body.signerEmail) {
+          await sendSignatureRequestEmail({
+            to: body.signerEmail,
+            signerName: body.signerName,
+            documentName,
+            signUrl,
+          });
+        }
         set.status = 201;
         return {
           id: req.id,
-          signUrl: `${baseUrl}/sign/${req.signToken}`,
+          signUrl,
           manageUrl: `${baseUrl}/d/${req.id}?token=${req.manageToken}`,
         };
       },
