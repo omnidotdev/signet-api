@@ -27,6 +27,15 @@ export const signerFillPage = (data: SignerFillData, token: string): string => {
     );
   }
 
+  if (data.waitingFor) {
+    return shell(
+      `Sign: ${esc(data.documentName)}`,
+      `<div class="authbar"><a href="/">Signet</a></div>
+<h1>${esc(data.documentName)}</h1>
+<div class="card"><p class="note">This document is signed in order, and it is not your turn yet. You will be emailed a link to sign once ${esc(data.waitingFor)} has signed.</p></div>`,
+    );
+  }
+
   const payload = JSON.stringify({ ...data, token }).replace(/</g, "\\u003c");
   return shell(
     `Sign: ${esc(data.documentName)}`,
@@ -109,6 +118,18 @@ for (const tab of document.querySelectorAll(".tab")) {
   });
 }
 sigText.addEventListener("input", renderPreviews);
+
+// remember the adopted signature on this device, so repeat signers reuse it
+let savedSig = {};
+try { savedSig = JSON.parse(localStorage.getItem("signet.sig") || "{}"); } catch {}
+if (savedSig.name) sigText.value = savedSig.name;
+if (savedSig.image) {
+  const im = new Image();
+  im.onload = () => { pctx.drawImage(im, 0, 0, pad.width, pad.height); drawn = true; renderPreviews(); };
+  im.src = savedSig.image;
+  const drawTab = document.querySelector('.tab[data-tab="draw"]');
+  if (drawTab) drawTab.click();
+}
 
 // draw pad
 let drawing = false, lastX = 0, lastY = 0;
@@ -204,6 +225,7 @@ document.getElementById("finish-btn").addEventListener("click", async () => {
     const body = { signature: name, signatureImage: img ? img.split(",")[1] : null, textValues };
     const res = await fetch("/sign/" + DATA.token, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
     if (!res.ok) throw new Error();
+    try { localStorage.setItem("signet.sig", JSON.stringify({ name, image: img || savedSig.image || null })); } catch {}
     const panel = document.getElementById("done-panel");
     panel.hidden = false;
     panel.innerHTML = '<div class="card"><p><span class="pill">Signed</span></p><a href="/sign/' + DATA.token + '/download"><button>Download signed PDF</button></a></div>';

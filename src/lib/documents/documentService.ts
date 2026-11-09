@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { and, asc, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, lt, ne } from "drizzle-orm";
 import type { Db } from "../db/client.ts";
 import { document, field, signatureEvent, signer } from "../db/schema.ts";
 import { generateToken } from "../db/tokens.ts";
@@ -167,6 +167,8 @@ export interface CreateDraftInput {
   ownerId?: string;
   ownerEmail?: string;
   signers: DraftSignerInput[];
+  /** "sequential" to require signing in order, else "parallel" (any order) */
+  signingMode?: "parallel" | "sequential";
 }
 
 export interface DraftRequest {
@@ -194,6 +196,8 @@ export const createDraft = async (
       contentHash,
       originalPdf: toBase64(input.pdf),
       manageToken,
+      signingMode:
+        input.signingMode === "sequential" ? "sequential" : "parallel",
       ownerId: input.ownerId ?? null,
       ownerEmail: input.ownerEmail ?? null,
     })
@@ -362,6 +366,8 @@ export interface SendResult {
     name: string;
     email: string | null;
     signToken: string;
+    /** whether to email this signer now (false for a later sequential signer) */
+    active: boolean;
   }[];
 }
 
@@ -372,7 +378,7 @@ export const sendDraft = async (
   manageToken: string,
 ): Promise<SendResult | null> => {
   const [doc] = await db
-    .select({ status: document.status })
+    .select({ status: document.status, signingMode: document.signingMode })
     .from(document)
     .where(and(eq(document.id, id), eq(document.manageToken, manageToken)));
   if (!doc || doc.status !== "draft") return null;
@@ -383,15 +389,24 @@ export const sendDraft = async (
     .where(eq(document.id, id));
   await appendProvenance(db, id, { type: "document.sent", data: {} });
 
-  const signers = await db
+  const rows = await db
     .select({
       name: signer.name,
       email: signer.email,
       signToken: signer.signToken,
+      orderIndex: signer.orderIndex,
     })
     .from(signer)
     .where(eq(signer.documentId, id))
     .orderBy(asc(signer.orderIndex));
+  // in sequential mode only the first signer is active; in parallel, all are
+  const signers = rows.map((s) => ({
+    name: s.name,
+    email: s.email,
+    signToken: s.signToken,
+    active:
+      doc.signingMode !== "sequential" || s.orderIndex === rows[0]?.orderIndex,
+  }));
   return { signers };
 };
 
@@ -471,6 +486,8 @@ export interface SignerFillData {
   documentName: string;
   signerName: string;
   alreadySigned: boolean;
+  /** in sequential mode, the name of the signer who must sign first, else null */
+  waitingFor: string | null;
   pdfBase64: string;
   fields: SignerFillField[];
 }
@@ -488,17 +505,37 @@ export const getSignerFillData = async (
       documentId: document.id,
       documentName: document.name,
       documentStatus: document.status,
+      signingMode: document.signingMode,
       originalPdf: document.originalPdf,
       signerId: signer.id,
       signerName: signer.name,
       signerStatus: signer.status,
+      orderIndex: signer.orderIndex,
     })
     .from(signer)
     .innerJoin(document, eq(signer.documentId, document.id))
     .where(eq(signer.signToken, signToken));
   if (!row) return null;
 
-  if (row.signerStatus === "pending") {
+  // sequential routing: find any earlier-order signer who has not signed yet
+  let waitingFor: string | null = null;
+  if (row.signingMode === "sequential" && row.signerStatus !== "signed") {
+    const [earlier] = await db
+      .select({ name: signer.name })
+      .from(signer)
+      .where(
+        and(
+          eq(signer.documentId, row.documentId),
+          lt(signer.orderIndex, row.orderIndex),
+          ne(signer.status, "signed"),
+        ),
+      )
+      .orderBy(asc(signer.orderIndex));
+    waitingFor = earlier?.name ?? null;
+  }
+
+  // record a view only when it is this signer's turn
+  if (row.signerStatus === "pending" && !waitingFor) {
     await db
       .update(signer)
       .set({ status: "viewed" })
@@ -527,6 +564,7 @@ export const getSignerFillData = async (
     signerName: row.signerName,
     alreadySigned:
       row.documentStatus === "completed" || row.signerStatus === "signed",
+    waitingFor,
     pdfBase64: row.originalPdf,
     fields,
   };
@@ -537,6 +575,13 @@ export interface SignResult {
   documentId?: string;
   /** true when this signature completed the document (all signers done) */
   completed?: boolean;
+  /** the next signer to notify now (sequential routing), if any */
+  notifySigner?: {
+    name: string;
+    email: string | null;
+    signToken: string;
+    documentName: string;
+  };
   error?: string;
 }
 
@@ -581,6 +626,21 @@ export const signByToken = async (
   if (!doc) return { ok: false, error: "not_found" };
   if (doc.status === "voided") return { ok: false, error: "voided" };
   if (doc.status === "draft") return { ok: false, error: "not_sent" };
+
+  // sequential routing: an earlier-order signer must go first
+  if (doc.signingMode === "sequential") {
+    const earlier = await db
+      .select({ id: signer.id })
+      .from(signer)
+      .where(
+        and(
+          eq(signer.documentId, doc.id),
+          lt(signer.orderIndex, sgn.orderIndex),
+          ne(signer.status, "signed"),
+        ),
+      );
+    if (earlier.length > 0) return { ok: false, error: "out_of_order" };
+  }
 
   const adopted = signatureName?.trim() || sgn.name;
   const dateStamp = new Date().toISOString().slice(0, 10);
@@ -665,7 +725,23 @@ export const signByToken = async (
     });
   }
 
-  return { ok: true, documentId: doc.id, completed };
+  // sequential routing: hand off to the next signer in order
+  let notifySigner: SignResult["notifySigner"];
+  if (!completed && doc.signingMode === "sequential") {
+    const next = signers
+      .filter((s) => s.status !== "signed")
+      .sort((a, b) => a.orderIndex - b.orderIndex)[0];
+    if (next) {
+      notifySigner = {
+        name: next.name,
+        email: next.email,
+        signToken: next.signToken,
+        documentName: doc.name,
+      };
+    }
+  }
+
+  return { ok: true, documentId: doc.id, completed, notifySigner };
 };
 
 export interface DocumentStatus {

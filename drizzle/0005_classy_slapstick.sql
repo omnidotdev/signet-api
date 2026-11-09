@@ -1,0 +1,1 @@
+ALTER TABLE "document" ADD COLUMN "signing_mode" text DEFAULT 'parallel' NOT NULL;

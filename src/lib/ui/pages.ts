@@ -58,6 +58,8 @@ const STYLE = `
   .signer-row { display: flex; gap: 8px; margin-bottom: 8px; align-items: center; }
   .signer-row input { flex: 1; }
   .signer-row .s-remove { flex: 0 0 auto; }
+  .checkbox { display: flex; align-items: center; gap: 8px; font-weight: 400; font-size: 0.875rem; color: var(--fg-muted); }
+  .checkbox input { width: auto; }
 `;
 
 import type { OwnerDocument } from "../documents/documentService.ts";
@@ -118,6 +120,7 @@ export const landingPage = (header = ""): string =>
     <label>Signers</label>
     <div id="signers"></div>
     <button type="button" id="add-signer" class="ghost">Add another signer</button>
+    <label class="checkbox"><input type="checkbox" id="seq" /> Require signing in order</label>
     <button id="send-btn" type="submit">Prepare and place fields</button>
     <p class="note">You will place signature and date fields on the document next.</p>
   </form>
@@ -160,6 +163,7 @@ export const landingPage = (header = ""): string =>
       fd.set("file", document.getElementById("s-file").files[0]);
       fd.set("name", document.getElementById("s-name").value);
       fd.set("signers", JSON.stringify(signers));
+      fd.set("signingMode", document.getElementById("seq").checked ? "sequential" : "parallel");
       const res = await fetch("/api/drafts", { method: "POST", body: fd });
       if (!res.ok) throw new Error();
       const data = await res.json();
