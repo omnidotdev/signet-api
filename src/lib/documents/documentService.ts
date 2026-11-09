@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { and, asc, desc, eq, lt, ne } from "drizzle-orm";
 import type { Db } from "../db/client.ts";
+import type { TemplateField } from "../db/schema.ts";
 import { document, field, signatureEvent, signer } from "../db/schema.ts";
 import { generateToken } from "../db/tokens.ts";
 import { detectFields } from "../fields/detect.ts";
@@ -169,6 +170,8 @@ export interface CreateDraftInput {
   signers: DraftSignerInput[];
   /** "sequential" to require signing in order, else "parallel" (any order) */
   signingMode?: "parallel" | "sequential";
+  /** pre-set fields (from a template); when omitted, fields are auto-detected */
+  fields?: TemplateField[];
 }
 
 export interface DraftRequest {
@@ -220,10 +223,12 @@ export const createDraft = async (
     .returning({ id: signer.id });
 
   const firstSigner = signerRows[0];
-  const detected = await detectFields(input.pdf);
-  if (detected.length > 0 && firstSigner) {
+  // use the template's fields when provided, else auto-detect from the text
+  const fromTemplate = input.fields !== undefined;
+  const placed = input.fields ?? (await detectFields(input.pdf));
+  if (placed.length > 0 && firstSigner) {
     await db.insert(field).values(
-      detected.map((f) => ({
+      placed.map((f) => ({
         documentId: doc.id,
         signerId: firstSigner.id,
         type: f.type,
@@ -232,7 +237,7 @@ export const createDraft = async (
         y: f.y,
         width: f.width,
         height: f.height,
-        source: "detected",
+        source: fromTemplate ? "template" : "detected",
       })),
     );
   }
@@ -243,7 +248,7 @@ export const createDraft = async (
       name: input.name,
       contentHash,
       signers: input.signers.length,
-      fields: detected.length,
+      fields: placed.length,
     },
   });
 
@@ -383,9 +388,10 @@ export const sendDraft = async (
     .where(and(eq(document.id, id), eq(document.manageToken, manageToken)));
   if (!doc || doc.status !== "draft") return null;
 
+  const now = new Date();
   await db
     .update(document)
-    .set({ status: "sent", updatedAt: new Date() })
+    .set({ status: "sent", sentAt: now, updatedAt: now })
     .where(eq(document.id, id));
   await appendProvenance(db, id, { type: "document.sent", data: {} });
 

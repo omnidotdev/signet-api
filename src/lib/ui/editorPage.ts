@@ -28,6 +28,7 @@ export const editorPage = (data: EditorData, manageToken: string): string => {
   <button type="button" data-add="text">+ Text</button>
   <span class="spacer"></span>
   <button type="button" id="save-btn" class="ghost">Save</button>
+  <button type="button" id="tpl-btn" class="ghost">Save as template</button>
   <button type="button" id="send-btn">Send for signature</button>
 </div>
 <p id="editor-status" class="note"></p>
@@ -179,6 +180,13 @@ async function save() {
   return res.ok;
 }
 document.getElementById("save-btn").addEventListener("click", save);
+
+document.getElementById("tpl-btn").addEventListener("click", async () => {
+  if (!(await save())) return;
+  const res = await fetch("/d/" + DATA.id + "/template?token=" + encodeURIComponent(DATA.manageToken), { method: "POST" });
+  const out = await res.json().catch(() => ({}));
+  statusEl.textContent = res.ok ? "Saved as a template; find it on your dashboard." : (out.error === "sign_in_required" ? "Sign in to save templates." : "Could not save template.");
+});
 
 document.getElementById("send-btn").addEventListener("click", async () => {
   if (!(await save())) return;

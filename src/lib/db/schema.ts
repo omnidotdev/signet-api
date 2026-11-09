@@ -24,6 +24,8 @@ export const document = pgTable("document", {
   manageToken: text("manage_token").notNull(),
   /** parallel (any order) | sequential (one signer at a time by orderIndex) */
   signingMode: text("signing_mode").notNull().default("parallel"),
+  /** when the draft was sent, the baseline for reminder timing */
+  sentAt: timestamp("sent_at", { withTimezone: true }),
   /** Gatekeeper subject of the signed-in sender, null for anonymous sends */
   ownerId: text("owner_id"),
   /** denormalized sender email for dashboard display */
@@ -53,6 +55,8 @@ export const signer = pgTable("signer", {
   color: text("color"),
   /** base64 PNG of a drawn signature, stamped into this signer's fields */
   signatureImage: text("signature_image"),
+  /** when this signer was last reminded, to rate-limit reminder emails */
+  lastReminderAt: timestamp("last_reminder_at", { withTimezone: true }),
   signedAt: timestamp("signed_at", { withTimezone: true }),
 });
 
@@ -101,7 +105,33 @@ export const field = pgTable("field", {
   value: text("value"),
 });
 
+/** A field position stored on a reusable template */
+export interface TemplateField {
+  type: string;
+  page: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/** A reusable document + field layout an owner can start new documents from */
+export const template = pgTable("template", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  name: text("name").notNull(),
+  /** Gatekeeper subject of the owner; templates are account-scoped */
+  ownerId: text("owner_id").notNull(),
+  /** base64-encoded PDF */
+  pdfBase64: text("pdf_base64").notNull(),
+  /** the field layout, applied to the first signer on use */
+  fields: jsonb("fields").notNull().$type<TemplateField[]>(),
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
+
 export type Document = typeof document.$inferSelect;
 export type Field = typeof field.$inferSelect;
 export type Signer = typeof signer.$inferSelect;
 export type SignatureEventRow = typeof signatureEvent.$inferSelect;
+export type Template = typeof template.$inferSelect;

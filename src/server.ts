@@ -29,7 +29,13 @@ import {
   signByToken,
   voidDocument,
 } from "./lib/documents/documentService.ts";
+import {
+  createDraftFromTemplate,
+  listTemplates,
+  saveTemplateFromDraft,
+} from "./lib/documents/templateService.ts";
 import { sendSignatureRequestEmail } from "./lib/email/signatureRequestEmail.ts";
+import { runReminders } from "./lib/reminders/reminderJob.ts";
 import { signPdf } from "./lib/signing/pdfSigner.ts";
 import { loadServiceSigner } from "./lib/signing/signerIdentity.ts";
 import { editorPage } from "./lib/ui/editorPage.ts";
@@ -208,6 +214,19 @@ if (authEnabled && authConfig) {
 if (hasDb) {
   const db = getDb();
 
+  // periodically remind signers with a document waiting on them
+  const reminderHours = Number(process.env.SIGNET_REMINDER_HOURS ?? 24);
+  if (reminderHours > 0) {
+    const intervalMs = reminderHours * 60 * 60 * 1000;
+    const sweep = () =>
+      runReminders(db, baseUrl, intervalMs, sendSignatureRequestEmail).catch(
+        (err) => console.warn("[signet] reminder sweep failed", err),
+      );
+    setInterval(sweep, 60 * 60 * 1000).unref();
+  } else {
+    console.warn("SIGNET_REMINDER_HOURS=0, signer reminders disabled");
+  }
+
   app
     // create a signing request, returns shareable links
     .post(
@@ -357,6 +376,19 @@ if (hasDb) {
       });
       return { ok: true, signers };
     })
+    // save the draft's document + field layout as a reusable template
+    .post("/d/:id/template", async ({ params, query, set }) => {
+      const result = await saveTemplateFromDraft(
+        db,
+        params.id,
+        query.token ?? "",
+      );
+      if (!result) {
+        set.status = 400;
+        return { ok: false, error: "sign_in_required" };
+      }
+      return { ok: true, id: result.id };
+    })
     // signer-facing fill overlay
     .get("/sign/:token", async ({ params }) => {
       const data = await getSignerFillData(db, params.token);
@@ -441,15 +473,18 @@ if (hasDb) {
 
   if (authEnabled) {
     app
-      // the owner dashboard: every document the signed-in sender created
+      // the owner dashboard: documents and templates the signed-in sender owns
       .get("/dashboard", async ({ session, set }) => {
         if (!session) {
           set.status = 302;
           set.headers.location = "/login";
           return null;
         }
-        const docs = await listDocumentsByOwner(db, session.sub);
-        return html(dashboardPage(session.email, docs));
+        const [docs, templates] = await Promise.all([
+          listDocumentsByOwner(db, session.sub),
+          listTemplates(db, session.sub),
+        ]);
+        return html(dashboardPage(session.email, docs, templates));
       })
       // owner downloads a signed document, authorized by session, not a token
       .get("/dashboard/d/:id/signed", async ({ session, params, set }) => {
@@ -464,7 +499,55 @@ if (hasDb) {
           return { error: "not_available" };
         }
         return pdfResponse(signed, "signed.pdf");
-      });
+      })
+      // start a new draft from one of the owner's templates
+      .post(
+        "/api/drafts/from-template",
+        async ({ session, body, set }) => {
+          if (!session) {
+            set.status = 401;
+            return { ok: false };
+          }
+          let signers: { name: string; email?: string }[] = [];
+          try {
+            signers = (
+              JSON.parse(body.signers) as { name?: string; email?: string }[]
+            )
+              .filter((s) => s.name?.trim())
+              .map((s) => ({
+                name: s.name as string,
+                email: s.email || undefined,
+              }));
+          } catch {
+            signers = [];
+          }
+          if (signers.length === 0) {
+            set.status = 400;
+            return { ok: false, error: "at_least_one_signer" };
+          }
+          const draft = await createDraftFromTemplate(
+            db,
+            body.templateId,
+            session.sub,
+            signers,
+            session.email,
+          );
+          if (!draft) {
+            set.status = 404;
+            return { ok: false };
+          }
+          return {
+            ok: true,
+            editUrl: `${baseUrl}/d/${draft.id}/edit?token=${draft.manageToken}`,
+          };
+        },
+        {
+          body: t.Object({
+            templateId: t.String(),
+            signers: t.String(),
+          }),
+        },
+      );
   }
 }
 
