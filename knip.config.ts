@@ -8,8 +8,8 @@ const knipConfig: KnipConfig = {
   // exported types consumed only within their own module are public API surface,
   // not dead code
   ignoreExportsUsedInFile: true,
-  // release tooling (invoked in CI) and a GitHub dependency Knip cannot resolve
-  ignoreDependencies: ["@changesets/cli", "@omnidotdev/providers"],
+  // release tooling, invoked in CI so Knip does not see it imported
+  ignoreDependencies: ["@changesets/cli"],
 };
 
 export default knipConfig;
