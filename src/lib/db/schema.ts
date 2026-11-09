@@ -49,6 +49,8 @@ export const signer = pgTable("signer", {
   orderIndex: integer("order_index").notNull().default(0),
   /** hex color used to tint this signer's fields in the editor */
   color: text("color"),
+  /** base64 PNG of a drawn signature, stamped into this signer's fields */
+  signatureImage: text("signature_image"),
   signedAt: timestamp("signed_at", { withTimezone: true }),
 });
 

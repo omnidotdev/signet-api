@@ -457,6 +457,81 @@ export const getSignerView = async (
   return { ...view, fields: await countFields(db, signerId) };
 };
 
+export interface SignerFillField {
+  id: string;
+  type: string;
+  page: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface SignerFillData {
+  documentName: string;
+  signerName: string;
+  alreadySigned: boolean;
+  pdfBase64: string;
+  fields: SignerFillField[];
+}
+
+/**
+ * Everything the signer's fill overlay needs: the document, this signer's
+ * fields, and the PDF. Records a view event the first time, like getSignerView.
+ */
+export const getSignerFillData = async (
+  db: Db,
+  signToken: string,
+): Promise<SignerFillData | null> => {
+  const [row] = await db
+    .select({
+      documentId: document.id,
+      documentName: document.name,
+      documentStatus: document.status,
+      originalPdf: document.originalPdf,
+      signerId: signer.id,
+      signerName: signer.name,
+      signerStatus: signer.status,
+    })
+    .from(signer)
+    .innerJoin(document, eq(signer.documentId, document.id))
+    .where(eq(signer.signToken, signToken));
+  if (!row) return null;
+
+  if (row.signerStatus === "pending") {
+    await db
+      .update(signer)
+      .set({ status: "viewed" })
+      .where(eq(signer.signToken, signToken));
+    await appendProvenance(db, row.documentId, {
+      type: "document.viewed",
+      data: { signer: row.signerName },
+    });
+  }
+
+  const fields = await db
+    .select({
+      id: field.id,
+      type: field.type,
+      page: field.page,
+      x: field.x,
+      y: field.y,
+      width: field.width,
+      height: field.height,
+    })
+    .from(field)
+    .where(eq(field.signerId, row.signerId));
+
+  return {
+    documentName: row.documentName,
+    signerName: row.signerName,
+    alreadySigned:
+      row.documentStatus === "completed" || row.signerStatus === "signed",
+    pdfBase64: row.originalPdf,
+    fields,
+  };
+};
+
 export interface SignResult {
   ok: boolean;
   documentId?: string;
@@ -478,11 +553,19 @@ const fieldValueFor = (type: string, adopted: string, date: string): string => {
  * date, mark them signed, and once every signer has signed, stamp all the
  * filled fields and apply the single cryptographic seal.
  */
+export interface SignOptions {
+  /** base64 PNG of a drawn signature, stamped into signature/initials fields */
+  signatureImage?: string | null;
+  /** per-field text the signer typed, keyed by field id */
+  textValues?: Record<string, string>;
+}
+
 export const signByToken = async (
   db: Db,
   serviceSigner: ServiceSigner,
   signToken: string,
   signatureName?: string,
+  options?: SignOptions,
 ): Promise<SignResult> => {
   const [sgn] = await db
     .select()
@@ -502,21 +585,27 @@ export const signByToken = async (
   const adopted = signatureName?.trim() || sgn.name;
   const dateStamp = new Date().toISOString().slice(0, 10);
 
-  // fill this signer's fields with their values
+  // fill this signer's fields: typed text where provided, else derived values
   const myFields = await db
     .select()
     .from(field)
     .where(and(eq(field.documentId, doc.id), eq(field.signerId, sgn.id)));
   for (const f of myFields) {
-    await db
-      .update(field)
-      .set({ value: fieldValueFor(f.type, adopted, dateStamp) })
-      .where(eq(field.id, f.id));
+    const typed = options?.textValues?.[f.id];
+    const value =
+      f.type === "text"
+        ? (typed ?? f.value ?? "")
+        : fieldValueFor(f.type, adopted, dateStamp);
+    await db.update(field).set({ value }).where(eq(field.id, f.id));
   }
 
   await db
     .update(signer)
-    .set({ status: "signed", signedAt: new Date() })
+    .set({
+      status: "signed",
+      signedAt: new Date(),
+      signatureImage: options?.signatureImage ?? null,
+    })
     .where(eq(signer.id, sgn.id));
   await appendProvenance(db, doc.id, {
     type: "document.signed",
@@ -538,7 +627,25 @@ export const signByToken = async (
       .select()
       .from(field)
       .where(eq(field.documentId, doc.id));
-    const stamped = await stampFields(fromBase64(doc.originalPdf), allFields);
+    // a signature/initials field uses its signer's drawn image when they drew one
+    const imageBySigner = new Map(signers.map((s) => [s.id, s.signatureImage]));
+    const items = allFields.map((f) => {
+      const drawn =
+        (f.type === "signature" || f.type === "initials") && f.signerId
+          ? imageBySigner.get(f.signerId)
+          : null;
+      return {
+        type: f.type,
+        page: f.page,
+        x: f.x,
+        y: f.y,
+        width: f.width,
+        height: f.height,
+        value: f.value,
+        image: drawn ? fromBase64(drawn) : null,
+      };
+    });
+    const stamped = await stampFields(fromBase64(doc.originalPdf), items);
     const signed = await signPdf(stamped, serviceSigner.pkcs12, {
       name: serviceSigner.commonName,
       reason: "Signed via Signet",
