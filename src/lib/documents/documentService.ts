@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, desc, eq } from "drizzle-orm";
 import type { Db } from "../db/client.ts";
 import { document, signatureEvent, signer } from "../db/schema.ts";
 import { generateToken } from "../db/tokens.ts";
@@ -63,6 +63,9 @@ export interface CreateSigningRequestInput {
   pdf: Uint8Array;
   signerName: string;
   signerEmail?: string;
+  /** Gatekeeper subject of the signed-in sender, omitted for anonymous sends */
+  ownerId?: string;
+  ownerEmail?: string;
 }
 
 export interface SigningRequest {
@@ -88,6 +91,8 @@ export const createSigningRequest = async (
       contentHash,
       originalPdf: toBase64(input.pdf),
       manageToken,
+      ownerId: input.ownerId ?? null,
+      ownerEmail: input.ownerEmail ?? null,
     })
     .returning({ id: document.id });
 
@@ -288,6 +293,68 @@ export const getSignedPdfForSignToken = async (
     .where(eq(signer.signToken, signToken));
   if (!row?.signedPdf) return null;
   return fromBase64(row.signedPdf);
+};
+
+export interface OwnerDocument {
+  id: string;
+  name: string;
+  status: string;
+  createdAt: string;
+  manageToken: string;
+  hasSignedPdf: boolean;
+  signerName: string | null;
+  signerStatus: string | null;
+}
+
+/**
+ * List a signed-in owner's documents, newest first, for their dashboard. Each
+ * row carries the owner's own manage token so the dashboard can link to the
+ * status and signed-PDF routes.
+ */
+export const listDocumentsByOwner = async (
+  db: Db,
+  ownerId: string,
+): Promise<OwnerDocument[]> => {
+  const rows = await db
+    .select({
+      id: document.id,
+      name: document.name,
+      status: document.status,
+      createdAt: document.createdAt,
+      manageToken: document.manageToken,
+      signedPdf: document.signedPdf,
+      signerName: signer.name,
+      signerStatus: signer.status,
+    })
+    .from(document)
+    .leftJoin(signer, eq(signer.documentId, document.id))
+    .where(eq(document.ownerId, ownerId))
+    .orderBy(desc(document.createdAt));
+
+  return rows.map((r) => ({
+    id: r.id,
+    name: r.name,
+    status: r.status,
+    createdAt: r.createdAt.toISOString(),
+    manageToken: r.manageToken,
+    hasSignedPdf: r.signedPdf !== null,
+    signerName: r.signerName,
+    signerStatus: r.signerStatus,
+  }));
+};
+
+/** Return the signed PDF for a document the given owner owns, else null */
+export const getSignedPdfForOwner = async (
+  db: Db,
+  id: string,
+  ownerId: string,
+): Promise<Uint8Array | null> => {
+  const [doc] = await db
+    .select({ signedPdf: document.signedPdf })
+    .from(document)
+    .where(and(eq(document.id, id), eq(document.ownerId, ownerId)));
+  if (!doc?.signedPdf) return null;
+  return fromBase64(doc.signedPdf);
 };
 
 /** Void a document so it can no longer be signed */
