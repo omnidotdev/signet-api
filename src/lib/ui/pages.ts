@@ -55,6 +55,9 @@ const STYLE = `
   .chip.done { background: var(--accent); color: var(--accent-fg); border-color: transparent; }
   .chip.void { opacity: .6; text-decoration: line-through; }
   .empty { color: var(--fg-subtle); padding: 24px 0; }
+  .signer-row { display: flex; gap: 8px; margin-bottom: 8px; align-items: center; }
+  .signer-row input { flex: 1; }
+  .signer-row .s-remove { flex: 0 0 auto; }
 `;
 
 import type { OwnerDocument } from "../documents/documentService.ts";
@@ -112,9 +115,11 @@ export const landingPage = (header = ""): string =>
   <form id="send">
     <div><label for="s-file">PDF document</label><input id="s-file" name="file" type="file" accept="application/pdf" required /></div>
     <div><label for="s-name">Document name</label><input id="s-name" name="name" type="text" placeholder="Mutual NDA" /></div>
-    <div><label for="s-signer">Signer name</label><input id="s-signer" name="signerName" type="text" placeholder="Jane Doe" required /></div>
-    <div><label for="s-email">Signer email (optional)</label><input id="s-email" name="signerEmail" type="email" placeholder="jane@example.com" /></div>
-    <button id="send-btn" type="submit">Create signing link</button>
+    <label>Signers</label>
+    <div id="signers"></div>
+    <button type="button" id="add-signer" class="ghost">Add another signer</button>
+    <button id="send-btn" type="submit">Prepare and place fields</button>
+    <p class="note">You will place signature and date fields on the document next.</p>
   </form>
   <div id="send-result"></div>
 </div>
@@ -129,20 +134,37 @@ export const landingPage = (header = ""): string =>
 </div>
 
 <script>
+  const signersEl = document.getElementById("signers");
+  const addSignerRow = (first) => {
+    const row = document.createElement("div");
+    row.className = "signer-row";
+    row.innerHTML = '<input type="text" class="s-name" placeholder="Signer name" ' + (first ? "required" : "") + ' /><input type="email" class="s-email" placeholder="Email (optional)" /><button type="button" class="link s-remove">Remove</button>';
+    row.querySelector(".s-remove").addEventListener("click", () => row.remove());
+    signersEl.appendChild(row);
+  };
+  addSignerRow(true);
+  document.getElementById("add-signer").addEventListener("click", () => addSignerRow(false));
+
   const send = document.getElementById("send");
   const sendResult = document.getElementById("send-result");
   send.addEventListener("submit", async (e) => {
     e.preventDefault();
     const btn = document.getElementById("send-btn");
-    btn.disabled = true; btn.textContent = "Creating...";
+    const signers = [...signersEl.querySelectorAll(".signer-row")]
+      .map((r) => ({ name: r.querySelector(".s-name").value.trim(), email: r.querySelector(".s-email").value.trim() }))
+      .filter((s) => s.name);
+    if (signers.length === 0) { sendResult.innerHTML = '<p class="note">Add at least one signer.</p>'; return; }
+    btn.disabled = true; btn.textContent = "Preparing...";
     try {
-      const res = await fetch("/api/documents", { method: "POST", body: new FormData(send) });
+      const fd = new FormData();
+      fd.set("file", document.getElementById("s-file").files[0]);
+      fd.set("name", document.getElementById("s-name").value);
+      fd.set("signers", JSON.stringify(signers));
+      const res = await fetch("/api/drafts", { method: "POST", body: fd });
       if (!res.ok) throw new Error();
       const data = await res.json();
-      sendResult.innerHTML = '<p class="note">Share this link with the signer:</p><div class="share">' + data.signUrl + '</div><p class="note">Track status: <a href="' + data.manageUrl + '">' + data.manageUrl + '</a></p>';
-      btn.textContent = "Created";
-    } catch { btn.textContent = "Error, try again"; }
-    finally { setTimeout(() => { btn.disabled = false; btn.textContent = "Create signing link"; }, 1500); }
+      window.location.href = data.editUrl;
+    } catch { btn.disabled = false; btn.textContent = "Prepare and place fields"; sendResult.innerHTML = '<p class="note">Something went wrong, try again.</p>'; }
   });
 
   const quick = document.getElementById("quick");

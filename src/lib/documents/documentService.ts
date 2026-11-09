@@ -4,7 +4,7 @@ import type { Db } from "../db/client.ts";
 import { document, field, signatureEvent, signer } from "../db/schema.ts";
 import { generateToken } from "../db/tokens.ts";
 import { detectFields } from "../fields/detect.ts";
-import { stampFields } from "../fields/stamp.ts";
+import { initialsOf, stampFields } from "../fields/stamp.ts";
 import type { ProvenanceEvent } from "../provenance/ledger.ts";
 import { appendEvent, verifyLedger } from "../provenance/ledger.ts";
 import { signPdf } from "../signing/pdfSigner.ts";
@@ -17,6 +17,16 @@ const toBase64 = (bytes: Uint8Array): string =>
   Buffer.from(bytes).toString("base64");
 const fromBase64 = (b64: string): Uint8Array =>
   Uint8Array.from(Buffer.from(b64, "base64"));
+
+/** Distinct colors used to tint each signer's fields in the editor */
+export const SIGNER_COLORS = [
+  "#be6221",
+  "#2563a6",
+  "#2f855a",
+  "#8a3ca3",
+  "#b03a4a",
+  "#0f766e",
+];
 
 /**
  * Append a provenance event to a document's chain and persist it.
@@ -100,22 +110,28 @@ export const createSigningRequest = async (
 
   if (!doc) throw new Error("failed to create document");
 
-  await db.insert(signer).values({
-    documentId: doc.id,
-    name: input.signerName,
-    email: input.signerEmail ?? null,
-    signToken,
-    status: "pending",
-    orderIndex: 0,
-  });
+  const [sgn] = await db
+    .insert(signer)
+    .values({
+      documentId: doc.id,
+      name: input.signerName,
+      email: input.signerEmail ?? null,
+      signToken,
+      status: "pending",
+      orderIndex: 0,
+      color: SIGNER_COLORS[0],
+    })
+    .returning({ id: signer.id });
+  if (!sgn) throw new Error("failed to create signer");
 
-  // Auto-detect signature/date/initials fields from the document text. Best
-  // effort: a document with no detectable anchors still signs
+  // Auto-detect signature/date/initials fields from the document text and
+  // assign them to the signer. Best effort: no anchors still signs
   const detected = await detectFields(input.pdf);
   if (detected.length > 0) {
     await db.insert(field).values(
       detected.map((f) => ({
         documentId: doc.id,
+        signerId: sgn.id,
         type: f.type,
         page: f.page,
         x: f.x,
@@ -140,6 +156,245 @@ export const createSigningRequest = async (
   return { id: doc.id, manageToken, signToken };
 };
 
+export interface DraftSignerInput {
+  name: string;
+  email?: string;
+}
+
+export interface CreateDraftInput {
+  name: string;
+  pdf: Uint8Array;
+  ownerId?: string;
+  ownerEmail?: string;
+  signers: DraftSignerInput[];
+}
+
+export interface DraftRequest {
+  id: string;
+  manageToken: string;
+}
+
+/**
+ * Create a draft document with one or more signers, auto-detect fields, and
+ * assign the detected fields to the first signer. The draft is edited and then
+ * sent; nothing is emailed here.
+ */
+export const createDraft = async (
+  db: Db,
+  input: CreateDraftInput,
+): Promise<DraftRequest> => {
+  const manageToken = generateToken();
+  const contentHash = sha256(input.pdf);
+
+  const [doc] = await db
+    .insert(document)
+    .values({
+      name: input.name,
+      status: "draft",
+      contentHash,
+      originalPdf: toBase64(input.pdf),
+      manageToken,
+      ownerId: input.ownerId ?? null,
+      ownerEmail: input.ownerEmail ?? null,
+    })
+    .returning({ id: document.id });
+  if (!doc) throw new Error("failed to create document");
+
+  const signerRows = await db
+    .insert(signer)
+    .values(
+      input.signers.map((s, i) => ({
+        documentId: doc.id,
+        name: s.name,
+        email: s.email ?? null,
+        signToken: generateToken(),
+        status: "pending",
+        orderIndex: i,
+        color: SIGNER_COLORS[i % SIGNER_COLORS.length],
+      })),
+    )
+    .returning({ id: signer.id });
+
+  const firstSigner = signerRows[0];
+  const detected = await detectFields(input.pdf);
+  if (detected.length > 0 && firstSigner) {
+    await db.insert(field).values(
+      detected.map((f) => ({
+        documentId: doc.id,
+        signerId: firstSigner.id,
+        type: f.type,
+        page: f.page,
+        x: f.x,
+        y: f.y,
+        width: f.width,
+        height: f.height,
+        source: "detected",
+      })),
+    );
+  }
+
+  await appendProvenance(db, doc.id, {
+    type: "document.created",
+    data: {
+      name: input.name,
+      contentHash,
+      signers: input.signers.length,
+      fields: detected.length,
+    },
+  });
+
+  return { id: doc.id, manageToken };
+};
+
+export interface EditorField {
+  id?: string;
+  signerId: string | null;
+  type: string;
+  page: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface EditorData {
+  id: string;
+  name: string;
+  status: string;
+  pdfBase64: string;
+  signers: {
+    id: string;
+    name: string;
+    email: string | null;
+    color: string | null;
+    status: string;
+    orderIndex: number;
+  }[];
+  fields: EditorField[];
+}
+
+/** Load everything the editor needs, gated by the manage token */
+export const getEditorData = async (
+  db: Db,
+  id: string,
+  manageToken: string,
+): Promise<EditorData | null> => {
+  const [doc] = await db
+    .select()
+    .from(document)
+    .where(and(eq(document.id, id), eq(document.manageToken, manageToken)));
+  if (!doc) return null;
+
+  const signers = await db
+    .select()
+    .from(signer)
+    .where(eq(signer.documentId, id))
+    .orderBy(asc(signer.orderIndex));
+  const fields = await db.select().from(field).where(eq(field.documentId, id));
+
+  return {
+    id: doc.id,
+    name: doc.name,
+    status: doc.status,
+    pdfBase64: doc.originalPdf,
+    signers: signers.map((s) => ({
+      id: s.id,
+      name: s.name,
+      email: s.email,
+      color: s.color,
+      status: s.status,
+      orderIndex: s.orderIndex,
+    })),
+    fields: fields.map((f) => ({
+      id: f.id,
+      signerId: f.signerId,
+      type: f.type,
+      page: f.page,
+      x: f.x,
+      y: f.y,
+      width: f.width,
+      height: f.height,
+    })),
+  };
+};
+
+/** Replace a draft's fields with the editor's set, gated by the manage token */
+export const saveFields = async (
+  db: Db,
+  id: string,
+  manageToken: string,
+  fields: EditorField[],
+): Promise<boolean> => {
+  const [doc] = await db
+    .select({ status: document.status })
+    .from(document)
+    .where(and(eq(document.id, id), eq(document.manageToken, manageToken)));
+  if (!doc || doc.status !== "draft") return false;
+
+  const signerRows = await db
+    .select({ id: signer.id })
+    .from(signer)
+    .where(eq(signer.documentId, id));
+  const validSigners = new Set(signerRows.map((s) => s.id));
+
+  await db.delete(field).where(eq(field.documentId, id));
+  if (fields.length > 0) {
+    await db.insert(field).values(
+      fields.map((f) => ({
+        documentId: id,
+        signerId:
+          f.signerId && validSigners.has(f.signerId) ? f.signerId : null,
+        type: f.type,
+        page: f.page,
+        x: f.x,
+        y: f.y,
+        width: f.width,
+        height: f.height,
+        source: "manual",
+      })),
+    );
+  }
+  return true;
+};
+
+export interface SendResult {
+  signers: {
+    name: string;
+    email: string | null;
+    signToken: string;
+  }[];
+}
+
+/** Send a draft: mark it sent and return the signer links to deliver */
+export const sendDraft = async (
+  db: Db,
+  id: string,
+  manageToken: string,
+): Promise<SendResult | null> => {
+  const [doc] = await db
+    .select({ status: document.status })
+    .from(document)
+    .where(and(eq(document.id, id), eq(document.manageToken, manageToken)));
+  if (!doc || doc.status !== "draft") return null;
+
+  await db
+    .update(document)
+    .set({ status: "sent", updatedAt: new Date() })
+    .where(eq(document.id, id));
+  await appendProvenance(db, id, { type: "document.sent", data: {} });
+
+  const signers = await db
+    .select({
+      name: signer.name,
+      email: signer.email,
+      signToken: signer.signToken,
+    })
+    .from(signer)
+    .where(eq(signer.documentId, id))
+    .orderBy(asc(signer.orderIndex));
+  return { signers };
+};
+
 export interface SignerView {
   documentId: string;
   documentName: string;
@@ -149,15 +404,15 @@ export interface SignerView {
   fields: { signature: number; date: number; initials: number };
 }
 
-/** Count a document's fields by type, for the signer-facing summary */
+/** Count one signer's fields by type, for the signer-facing summary */
 const countFields = async (
   db: Db,
-  documentId: string,
+  signerId: string,
 ): Promise<{ signature: number; date: number; initials: number }> => {
   const rows = await db
     .select({ type: field.type })
     .from(field)
-    .where(eq(field.documentId, documentId));
+    .where(eq(field.signerId, signerId));
   const counts = { signature: 0, date: 0, initials: 0 };
   for (const row of rows) {
     if (row.type === "signature") counts.signature += 1;
@@ -177,6 +432,7 @@ export const getSignerView = async (
       documentId: document.id,
       documentName: document.name,
       documentStatus: document.status,
+      signerId: signer.id,
       signerName: signer.name,
       signerStatus: signer.status,
     })
@@ -197,16 +453,31 @@ export const getSignerView = async (
     });
   }
 
-  return { ...row, fields: await countFields(db, row.documentId) };
+  const { signerId, ...view } = row;
+  return { ...view, fields: await countFields(db, signerId) };
 };
 
 export interface SignResult {
   ok: boolean;
   documentId?: string;
+  /** true when this signature completed the document (all signers done) */
+  completed?: boolean;
   error?: string;
 }
 
-/** Apply the signature for a sign token and mark the document completed */
+/** The text a field shows for an adopted signature and date */
+const fieldValueFor = (type: string, adopted: string, date: string): string => {
+  if (type === "signature") return adopted;
+  if (type === "initials") return initialsOf(adopted);
+  if (type === "date") return date;
+  return "";
+};
+
+/**
+ * Record a signer's signature: fill their fields with the adopted signature and
+ * date, mark them signed, and once every signer has signed, stamp all the
+ * filled fields and apply the single cryptographic seal.
+ */
 export const signByToken = async (
   db: Db,
   serviceSigner: ServiceSigner,
@@ -226,51 +497,68 @@ export const signByToken = async (
     .where(eq(document.id, sgn.documentId));
   if (!doc) return { ok: false, error: "not_found" };
   if (doc.status === "voided") return { ok: false, error: "voided" };
+  if (doc.status === "draft") return { ok: false, error: "not_sent" };
 
   const adopted = signatureName?.trim() || sgn.name;
   const dateStamp = new Date().toISOString().slice(0, 10);
 
-  // Stamp the adopted signature and date into the detected fields, then apply
-  // the cryptographic signature over the stamped document
-  const fields = await db
+  // fill this signer's fields with their values
+  const myFields = await db
     .select()
     .from(field)
-    .where(eq(field.documentId, doc.id));
-  const original = fromBase64(doc.originalPdf);
-  const stamped = await stampFields(original, fields, {
-    signature: adopted,
-    date: dateStamp,
-  });
-  const signed = await signPdf(stamped, serviceSigner.pkcs12, {
-    name: adopted,
-    reason: "Signed via Signet",
-    passphrase: serviceSigner.passphrase,
-  });
+    .where(and(eq(field.documentId, doc.id), eq(field.signerId, sgn.id)));
+  for (const f of myFields) {
+    await db
+      .update(field)
+      .set({ value: fieldValueFor(f.type, adopted, dateStamp) })
+      .where(eq(field.id, f.id));
+  }
 
   await db
     .update(signer)
     .set({ status: "signed", signedAt: new Date() })
     .where(eq(signer.id, sgn.id));
-
-  await db
-    .update(document)
-    .set({
-      signedPdf: toBase64(signed),
-      status: "completed",
-      updatedAt: new Date(),
-    })
-    .where(eq(document.id, doc.id));
-
   await appendProvenance(db, doc.id, {
     type: "document.signed",
     data: {
       signer: adopted,
       contentHash: doc.contentHash,
-      fields: fields.length,
+      fields: myFields.length,
     },
   });
 
-  return { ok: true, documentId: doc.id };
+  // seal once every signer has signed
+  const signers = await db
+    .select()
+    .from(signer)
+    .where(eq(signer.documentId, doc.id));
+  const completed = signers.every((s) => s.status === "signed");
+  if (completed) {
+    const allFields = await db
+      .select()
+      .from(field)
+      .where(eq(field.documentId, doc.id));
+    const stamped = await stampFields(fromBase64(doc.originalPdf), allFields);
+    const signed = await signPdf(stamped, serviceSigner.pkcs12, {
+      name: serviceSigner.commonName,
+      reason: "Signed via Signet",
+      passphrase: serviceSigner.passphrase,
+    });
+    await db
+      .update(document)
+      .set({
+        signedPdf: toBase64(signed),
+        status: "completed",
+        updatedAt: new Date(),
+      })
+      .where(eq(document.id, doc.id));
+    await appendProvenance(db, doc.id, {
+      type: "document.completed",
+      data: { signers: signers.length },
+    });
+  }
+
+  return { ok: true, documentId: doc.id, completed };
 };
 
 export interface DocumentStatus {

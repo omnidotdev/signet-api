@@ -47,6 +47,8 @@ export const signer = pgTable("signer", {
   /** pending | viewed | signed | declined */
   status: text("status").notNull().default("pending"),
   orderIndex: integer("order_index").notNull().default(0),
+  /** hex color used to tint this signer's fields in the editor */
+  color: text("color"),
   signedAt: timestamp("signed_at", { withTimezone: true }),
 });
 
@@ -76,6 +78,10 @@ export const field = pgTable("field", {
   documentId: uuid("document_id")
     .notNull()
     .references(() => document.id, { onDelete: "cascade" }),
+  /** the signer who fills this field, null until assigned */
+  signerId: uuid("signer_id").references(() => signer.id, {
+    onDelete: "set null",
+  }),
   /** signature | date | initials | text */
   type: text("type").notNull(),
   /** 1-based page number */
