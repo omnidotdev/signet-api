@@ -42,7 +42,57 @@ const STYLE = `
   .note { font-size: 0.75rem; color: var(--fg-subtle); margin-top: 8px; }
   .share { font-family: ui-monospace, "SFMono-Regular", monospace; font-size: 0.8125rem; word-break: break-all; background: var(--bg-muted); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); padding: 10px 12px; margin-top: 8px; }
   .pill { display: inline-block; font-size: 0.75rem; font-weight: 600; padding: 2px 10px; border-radius: var(--radius-full); background: var(--accent); color: var(--accent-fg); }
+  .authbar { display: flex; justify-content: flex-end; align-items: center; gap: 12px; font-size: 0.8125rem; margin-bottom: 8px; }
+  .authbar .who { color: var(--fg-subtle); }
+  .authbar form { display: inline; margin: 0; }
+  button.link { background: none; border: 0; color: var(--accent); font: inherit; font-weight: 600; padding: 0; width: auto; cursor: pointer; }
+  button.link:hover { background: none; text-decoration: underline; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
+  th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--border-subtle); vertical-align: top; }
+  th { color: var(--fg-subtle); font-weight: 500; font-size: 0.6875rem; text-transform: uppercase; letter-spacing: 0.04em; }
+  td .meta { color: var(--fg-subtle); font-size: 0.75rem; }
+  .chip { display: inline-block; font-size: 0.6875rem; font-weight: 600; padding: 2px 9px; border-radius: var(--radius-full); background: var(--bg-muted); color: var(--fg-muted); border: 1px solid var(--border-subtle); }
+  .chip.done { background: var(--accent); color: var(--accent-fg); border-color: transparent; }
+  .chip.void { opacity: .6; text-decoration: line-through; }
+  .empty { color: var(--fg-subtle); padding: 24px 0; }
 `;
+
+import type { OwnerDocument } from "../documents/documentService.ts";
+
+/** Escape text for safe interpolation into HTML */
+const esc = (value: string): string =>
+  value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+
+/** Human label for a document lifecycle status */
+const statusLabel = (status: string): string =>
+  ({
+    completed: "Signed",
+    sent: "Awaiting signature",
+    voided: "Voided",
+    draft: "Draft",
+  })[status] ?? status;
+
+/** Status chip class modifier for a document lifecycle status */
+const statusChipClass = (status: string): string =>
+  status === "completed"
+    ? "chip done"
+    : status === "voided"
+      ? "chip void"
+      : "chip";
+
+/**
+ * The signed-in header control: the user's email, a dashboard link, and a
+ * sign-out form. Rendered only when auth is enabled; anonymous visitors get a
+ * sign-in link instead. Pass undefined for a signed-out visitor.
+ */
+export const authBar = (email?: string): string =>
+  email
+    ? `<div class="authbar"><a href="/dashboard">Dashboard</a><span class="who">${esc(email)}</span><form method="post" action="/logout"><button class="link" type="submit">Sign out</button></form></div>`
+    : `<div class="authbar"><a href="/login">Sign in</a></div>`;
 
 /** Wrap page body in the shared document shell */
 export const shell = (title: string, body: string): string =>
@@ -51,10 +101,10 @@ export const shell = (title: string, body: string): string =>
 <title>${title}</title><style>${STYLE}</style></head><body><main>${body}</main></body></html>`;
 
 /** The landing page: quick-sign and send-for-signature */
-export const landingPage = (): string =>
+export const landingPage = (header = ""): string =>
   shell(
     "Signet",
-    `<h1>Signet</h1>
+    `${header}<h1>Signet</h1>
 <p class="sub">Sign documents with a verifiable signature and provenance trail.</p>
 
 <h2>Send for signature</h2>
@@ -122,9 +172,9 @@ export const signerPage = (
   alreadySigned: boolean,
 ): string =>
   shell(
-    `Sign: ${documentName}`,
-    `<h1>${documentName}</h1>
-<p class="sub">${signerName}, you have been asked to sign this document.</p>
+    `Sign: ${esc(documentName)}`,
+    `<h1>${esc(documentName)}</h1>
+<p class="sub">${esc(signerName)}, you have been asked to sign this document.</p>
 <div class="card">
 ${
   alreadySigned
@@ -151,6 +201,43 @@ ${
        </script>`
 }
 </div>`,
+  );
+
+/** A single dashboard row for one of the owner's documents */
+const dashboardRow = (doc: OwnerDocument): string => {
+  const created = doc.createdAt.slice(0, 10);
+  const signer = doc.signerName
+    ? `${esc(doc.signerName)}${doc.signerStatus ? `<div class="meta">${esc(doc.signerStatus)}</div>` : ""}`
+    : '<span class="meta">No signer</span>';
+  const download = doc.hasSignedPdf
+    ? `<a href="/dashboard/d/${doc.id}/signed">Download</a>`
+    : '<span class="meta">Pending</span>';
+  return `<tr>
+    <td>${esc(doc.name)}</td>
+    <td><span class="${statusChipClass(doc.status)}">${statusLabel(doc.status)}</span></td>
+    <td>${signer}</td>
+    <td class="meta">${created}</td>
+    <td>${download}</td>
+  </tr>`;
+};
+
+/** The owner dashboard: every document the signed-in sender has created */
+export const dashboardPage = (email: string, docs: OwnerDocument[]): string =>
+  shell(
+    "Your documents",
+    `${authBar(email)}<h1>Your documents</h1>
+<p class="sub">Every signing request you have created.</p>
+<div class="card">
+${
+  docs.length === 0
+    ? '<p class="empty">No documents yet. <a href="/">Send your first for signature.</a></p>'
+    : `<table>
+    <thead><tr><th>Document</th><th>Status</th><th>Signer</th><th>Created</th><th></th></tr></thead>
+    <tbody>${docs.map(dashboardRow).join("")}</tbody>
+  </table>`
+}
+</div>
+<p class="note"><a href="/">Send another document</a></p>`,
   );
 
 /** Shown when a sign link is invalid or expired */

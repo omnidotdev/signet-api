@@ -20,6 +20,10 @@ export const document = pgTable("document", {
   signedPdf: text("signed_pdf"),
   /** capability token for the sender to track and manage the request */
   manageToken: text("manage_token").notNull(),
+  /** Gatekeeper subject of the signed-in sender, null for anonymous sends */
+  ownerId: text("owner_id"),
+  /** denormalized sender email for dashboard display */
+  ownerEmail: text("owner_email"),
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),
