@@ -43,6 +43,20 @@
       "when": 1794258973562,
       "tag": "0005_classy_slapstick",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1794259383507,
+      "tag": "0006_wandering_inertia",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1794259554157,
+      "tag": "0007_fair_ghost_rider",
+      "breakpoints": true
     }
   ]
 }

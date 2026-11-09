@@ -60,6 +60,10 @@ const STYLE = `
   .signer-row .s-remove { flex: 0 0 auto; }
   .checkbox { display: flex; align-items: center; gap: 8px; font-weight: 400; font-size: 0.875rem; color: var(--fg-muted); }
   .checkbox input { width: auto; }
+  .tpl { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--border-subtle); flex-wrap: wrap; }
+  .tpl:last-child { border-bottom: 0; }
+  .tpl-form { display: flex; gap: 6px; align-items: center; margin: 0; }
+  .tpl-form input { width: auto; }
 `;
 
 import type { OwnerDocument } from "../documents/documentService.ts";
@@ -208,8 +212,31 @@ const dashboardRow = (doc: OwnerDocument): string => {
   </tr>`;
 };
 
-/** The owner dashboard: every document the signed-in sender has created */
-export const dashboardPage = (email: string, docs: OwnerDocument[]): string =>
+/** A summary of a reusable template for the dashboard */
+export interface TemplateRow {
+  id: string;
+  name: string;
+  createdAt: string;
+  fieldCount: number;
+}
+
+/** One template with an inline "start new" form */
+const templateRow = (t: TemplateRow): string =>
+  `<div class="tpl" data-id="${t.id}">
+    <div><strong>${esc(t.name)}</strong><div class="meta">${t.fieldCount} field${t.fieldCount === 1 ? "" : "s"}</div></div>
+    <form class="tpl-form">
+      <input type="text" class="t-name" placeholder="Signer name" required />
+      <input type="email" class="t-email" placeholder="Email (optional)" />
+      <button type="submit">Start</button>
+    </form>
+  </div>`;
+
+/** The owner dashboard: documents and reusable templates the sender owns */
+export const dashboardPage = (
+  email: string,
+  docs: OwnerDocument[],
+  templates: TemplateRow[] = [],
+): string =>
   shell(
     "Your documents",
     `${authBar(email)}<h1>Your documents</h1>
@@ -224,7 +251,34 @@ ${
   </table>`
 }
 </div>
-<p class="note"><a href="/">Send another document</a></p>`,
+<p class="note"><a href="/">Send another document</a></p>
+${
+  templates.length === 0
+    ? ""
+    : `<h2>Templates</h2>
+<div class="card">${templates.map(templateRow).join("")}</div>
+<script>
+  for (const form of document.querySelectorAll(".tpl-form")) {
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const wrap = form.closest(".tpl");
+      const btn = form.querySelector("button");
+      const name = form.querySelector(".t-name").value.trim();
+      if (!name) return;
+      btn.disabled = true; btn.textContent = "Starting...";
+      try {
+        const fd = new FormData();
+        fd.set("templateId", wrap.dataset.id);
+        fd.set("signers", JSON.stringify([{ name, email: form.querySelector(".t-email").value.trim() }]));
+        const res = await fetch("/api/drafts/from-template", { method: "POST", body: fd });
+        if (!res.ok) throw new Error();
+        const data = await res.json();
+        window.location.href = data.editUrl;
+      } catch { btn.disabled = false; btn.textContent = "Start"; }
+    });
+  }
+</script>`
+}`,
   );
 
 /** Shown when a sign link is invalid or expired */
