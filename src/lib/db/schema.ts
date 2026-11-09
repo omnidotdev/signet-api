@@ -22,6 +22,8 @@ export const document = pgTable("document", {
   signedPdf: text("signed_pdf"),
   /** capability token for the sender to track and manage the request */
   manageToken: text("manage_token").notNull(),
+  /** parallel (any order) | sequential (one signer at a time by orderIndex) */
+  signingMode: text("signing_mode").notNull().default("parallel"),
   /** Gatekeeper subject of the signed-in sender, null for anonymous sends */
   ownerId: text("owner_id"),
   /** denormalized sender email for dashboard display */

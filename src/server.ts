@@ -277,6 +277,8 @@ if (hasDb) {
           name: documentName,
           pdf,
           signers,
+          signingMode:
+            body.signingMode === "sequential" ? "sequential" : "parallel",
           ownerId: session?.sub,
           ownerEmail: session?.email,
         });
@@ -291,6 +293,7 @@ if (hasDb) {
           file: t.File({ type: "application/pdf" }),
           name: t.Optional(t.String()),
           signers: t.String(),
+          signingMode: t.Optional(t.String()),
         }),
       },
     )
@@ -341,7 +344,8 @@ if (hasDb) {
       }
       const signers = result.signers.map((s) => {
         const signUrl = `${baseUrl}/sign/${s.signToken}`;
-        if (s.email) {
+        // in sequential mode only the active (first) signer is emailed now
+        if (s.email && s.active) {
           void sendSignatureRequestEmail({
             to: s.email,
             signerName: s.name,
@@ -349,7 +353,7 @@ if (hasDb) {
             signUrl,
           });
         }
-        return { name: s.name, signUrl };
+        return { name: s.name, signUrl, active: s.active };
       });
       return { ok: true, signers };
     })
@@ -376,6 +380,15 @@ if (hasDb) {
         if (!result.ok) {
           set.status = result.error === "not_found" ? 404 : 409;
           return { ok: false, error: result.error };
+        }
+        // sequential routing: hand off to the next signer by email
+        if (result.notifySigner?.email) {
+          void sendSignatureRequestEmail({
+            to: result.notifySigner.email,
+            signerName: result.notifySigner.name,
+            documentName: result.notifySigner.documentName,
+            signUrl: `${baseUrl}/sign/${result.notifySigner.signToken}`,
+          });
         }
         return { ok: true, completed: result.completed };
       },
