@@ -21,7 +21,7 @@ import {
   getSignedPdf,
   getSignedPdfForOwner,
   getSignedPdfForSignToken,
-  getSignerView,
+  getSignerFillData,
   getStatus,
   listDocumentsByOwner,
   saveFields,
@@ -38,8 +38,8 @@ import {
   dashboardPage,
   landingPage,
   notFoundPage,
-  signerPage,
 } from "./lib/ui/pages.ts";
+import { signerFillPage } from "./lib/ui/signerFillPage.ts";
 
 // pdf.js browser build, served to the editor from the service (no CDN)
 const requireFile = createRequire(import.meta.url);
@@ -353,21 +353,13 @@ if (hasDb) {
       });
       return { ok: true, signers };
     })
-    // signer-facing page
+    // signer-facing fill overlay
     .get("/sign/:token", async ({ params }) => {
-      const view = await getSignerView(db, params.token);
-      if (!view) return html(notFoundPage());
-      return html(
-        signerPage(
-          params.token,
-          view.documentName,
-          view.signerName,
-          view.documentStatus === "completed" || view.signerStatus === "signed",
-          view.fields,
-        ),
-      );
+      const data = await getSignerFillData(db, params.token);
+      if (!data) return html(notFoundPage());
+      return html(signerFillPage(data, params.token));
     })
-    // signer applies their signature (optionally an adopted typed signature)
+    // signer applies their signature (typed name, drawn image, text fields)
     .post(
       "/sign/:token",
       async ({ params, body, set }) => {
@@ -376,15 +368,25 @@ if (hasDb) {
           signer,
           params.token,
           body?.signature,
+          {
+            signatureImage: body?.signatureImage ?? null,
+            textValues: body?.textValues ?? {},
+          },
         );
         if (!result.ok) {
           set.status = result.error === "not_found" ? 404 : 409;
           return { ok: false, error: result.error };
         }
-        return { ok: true };
+        return { ok: true, completed: result.completed };
       },
       {
-        body: t.Optional(t.Object({ signature: t.Optional(t.String()) })),
+        body: t.Optional(
+          t.Object({
+            signature: t.Optional(t.String()),
+            signatureImage: t.Optional(t.Union([t.String(), t.Null()])),
+            textValues: t.Optional(t.Record(t.String(), t.String())),
+          }),
+        ),
       },
     )
     // signer downloads their signed copy

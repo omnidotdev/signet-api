@@ -1,0 +1,1 @@
+ALTER TABLE "signer" ADD COLUMN "signature_image" text;
