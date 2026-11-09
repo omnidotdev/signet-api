@@ -1,8 +1,10 @@
 import { createHash } from "node:crypto";
 import { and, asc, desc, eq } from "drizzle-orm";
 import type { Db } from "../db/client.ts";
-import { document, signatureEvent, signer } from "../db/schema.ts";
+import { document, field, signatureEvent, signer } from "../db/schema.ts";
 import { generateToken } from "../db/tokens.ts";
+import { detectFields } from "../fields/detect.ts";
+import { stampFields } from "../fields/stamp.ts";
 import type { ProvenanceEvent } from "../provenance/ledger.ts";
 import { appendEvent, verifyLedger } from "../provenance/ledger.ts";
 import { signPdf } from "../signing/pdfSigner.ts";
@@ -107,9 +109,32 @@ export const createSigningRequest = async (
     orderIndex: 0,
   });
 
+  // Auto-detect signature/date/initials fields from the document text. Best
+  // effort: a document with no detectable anchors still signs
+  const detected = await detectFields(input.pdf);
+  if (detected.length > 0) {
+    await db.insert(field).values(
+      detected.map((f) => ({
+        documentId: doc.id,
+        type: f.type,
+        page: f.page,
+        x: f.x,
+        y: f.y,
+        width: f.width,
+        height: f.height,
+        source: "detected",
+      })),
+    );
+  }
+
   await appendProvenance(db, doc.id, {
     type: "document.created",
-    data: { name: input.name, contentHash, signer: input.signerName },
+    data: {
+      name: input.name,
+      contentHash,
+      signer: input.signerName,
+      fields: detected.length,
+    },
   });
 
   return { id: doc.id, manageToken, signToken };
@@ -121,7 +146,26 @@ export interface SignerView {
   documentStatus: string;
   signerName: string;
   signerStatus: string;
+  fields: { signature: number; date: number; initials: number };
 }
+
+/** Count a document's fields by type, for the signer-facing summary */
+const countFields = async (
+  db: Db,
+  documentId: string,
+): Promise<{ signature: number; date: number; initials: number }> => {
+  const rows = await db
+    .select({ type: field.type })
+    .from(field)
+    .where(eq(field.documentId, documentId));
+  const counts = { signature: 0, date: 0, initials: 0 };
+  for (const row of rows) {
+    if (row.type === "signature") counts.signature += 1;
+    else if (row.type === "date") counts.date += 1;
+    else if (row.type === "initials") counts.initials += 1;
+  }
+  return counts;
+};
 
 /** Load the signer-facing view for a sign token, recording a view event once */
 export const getSignerView = async (
@@ -153,7 +197,7 @@ export const getSignerView = async (
     });
   }
 
-  return row;
+  return { ...row, fields: await countFields(db, row.documentId) };
 };
 
 export interface SignResult {
@@ -167,6 +211,7 @@ export const signByToken = async (
   db: Db,
   serviceSigner: ServiceSigner,
   signToken: string,
+  signatureName?: string,
 ): Promise<SignResult> => {
   const [sgn] = await db
     .select()
@@ -182,9 +227,22 @@ export const signByToken = async (
   if (!doc) return { ok: false, error: "not_found" };
   if (doc.status === "voided") return { ok: false, error: "voided" };
 
+  const adopted = signatureName?.trim() || sgn.name;
+  const dateStamp = new Date().toISOString().slice(0, 10);
+
+  // Stamp the adopted signature and date into the detected fields, then apply
+  // the cryptographic signature over the stamped document
+  const fields = await db
+    .select()
+    .from(field)
+    .where(eq(field.documentId, doc.id));
   const original = fromBase64(doc.originalPdf);
-  const signed = await signPdf(original, serviceSigner.pkcs12, {
-    name: sgn.name,
+  const stamped = await stampFields(original, fields, {
+    signature: adopted,
+    date: dateStamp,
+  });
+  const signed = await signPdf(stamped, serviceSigner.pkcs12, {
+    name: adopted,
     reason: "Signed via Signet",
     passphrase: serviceSigner.passphrase,
   });
@@ -205,7 +263,11 @@ export const signByToken = async (
 
   await appendProvenance(db, doc.id, {
     type: "document.signed",
-    data: { signer: sgn.name, contentHash: doc.contentHash },
+    data: {
+      signer: adopted,
+      contentHash: doc.contentHash,
+      fields: fields.length,
+    },
   });
 
   return { ok: true, documentId: doc.id };

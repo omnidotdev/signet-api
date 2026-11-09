@@ -237,18 +237,30 @@ if (hasDb) {
           view.documentName,
           view.signerName,
           view.documentStatus === "completed" || view.signerStatus === "signed",
+          view.fields,
         ),
       );
     })
-    // signer applies their signature
-    .post("/sign/:token", async ({ params, set }) => {
-      const result = await signByToken(db, signer, params.token);
-      if (!result.ok) {
-        set.status = result.error === "not_found" ? 404 : 409;
-        return { ok: false, error: result.error };
-      }
-      return { ok: true };
-    })
+    // signer applies their signature (optionally an adopted typed signature)
+    .post(
+      "/sign/:token",
+      async ({ params, body, set }) => {
+        const result = await signByToken(
+          db,
+          signer,
+          params.token,
+          body?.signature,
+        );
+        if (!result.ok) {
+          set.status = result.error === "not_found" ? 404 : 409;
+          return { ok: false, error: result.error };
+        }
+        return { ok: true };
+      },
+      {
+        body: t.Optional(t.Object({ signature: t.Optional(t.String()) })),
+      },
+    )
     // signer downloads their signed copy
     .get("/sign/:token/download", async ({ params, set }) => {
       const signed = await getSignedPdfForSignToken(db, params.token);

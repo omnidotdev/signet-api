@@ -164,12 +164,38 @@ export const landingPage = (header = ""): string =>
 </script>`,
   );
 
+/** Counts of auto-detected fields on a document, by type */
+export interface FieldSummary {
+  signature: number;
+  date: number;
+  initials: number;
+}
+
+/** Join a list into "a", "a and b", or "a, b and c" */
+const joinList = (parts: string[]): string =>
+  parts.length <= 1
+    ? (parts[0] ?? "")
+    : `${parts.slice(0, -1).join(", ")} and ${parts.at(-1)}`;
+
+/** A sentence describing where the signer's marks will land */
+const describeFields = (f: FieldSummary): string => {
+  const parts: string[] = [];
+  const label = (n: number, one: string) => `${n} ${n === 1 ? one : `${one}s`}`;
+  if (f.signature) parts.push(label(f.signature, "signature field"));
+  if (f.initials) parts.push(label(f.initials, "initials field"));
+  if (f.date) parts.push(label(f.date, "date field"));
+  if (parts.length === 0)
+    return "Your verifiable signature will be applied to the whole document.";
+  return `We found ${joinList(parts)}. Your signature${f.date ? " and today's date" : ""} will be placed automatically.`;
+};
+
 /** The signer-facing page for a pending signing request */
 export const signerPage = (
   token: string,
   documentName: string,
   signerName: string,
   alreadySigned: boolean,
+  fields: FieldSummary = { signature: 0, date: 0, initials: 0 },
 ): string =>
   shell(
     `Sign: ${esc(documentName)}`,
@@ -180,7 +206,9 @@ ${
   alreadySigned
     ? `<p><span class="pill">Signed</span></p><p class="note">This document has been signed.</p>
        <a href="/sign/${token}/download"><button>Download signed PDF</button></a>`
-    : `<form id="sign" method="post" action="/sign/${token}">
+    : `<p class="note">${describeFields(fields)}</p>
+       <form id="sign" method="post" action="/sign/${token}">
+         <div><label for="sig-name">Type your full name to adopt your signature</label><input id="sig-name" name="signature" type="text" value="${esc(signerName)}" required /></div>
          <p>By clicking Sign, you apply your verifiable electronic signature to this document.</p>
          <button id="sign-btn" type="submit">Sign document</button>
        </form>
@@ -190,9 +218,10 @@ ${
          f.addEventListener("submit", async (e) => {
            e.preventDefault();
            const btn = document.getElementById("sign-btn");
+           const signature = document.getElementById("sig-name").value;
            btn.disabled = true; btn.textContent = "Signing...";
            try {
-             const res = await fetch("/sign/${token}", { method: "POST" });
+             const res = await fetch("/sign/${token}", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ signature }) });
              if (!res.ok) throw new Error();
              document.getElementById("sign-result").innerHTML = '<p><span class="pill">Signed</span></p><a href="/sign/${token}/download"><button>Download signed PDF</button></a>';
              f.remove();
