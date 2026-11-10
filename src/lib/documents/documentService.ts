@@ -885,6 +885,102 @@ export const saveFields = async (
   return true;
 };
 
+/**
+ * Editor data for a draft the owner owns (or shares through a workspace), for
+ * the native field editor. Null when not theirs. Only a draft can be edited.
+ */
+export const getEditorDataForOwner = async (
+  db: Db,
+  id: string,
+  ownerId: string,
+  workspaceIds: string[],
+): Promise<EditorData | null> => {
+  const [doc] = await db
+    .select()
+    .from(document)
+    .where(and(eq(document.id, id), ownerAccess(ownerId, workspaceIds)));
+  if (!doc) return null;
+
+  const signers = await db
+    .select()
+    .from(signer)
+    .where(eq(signer.documentId, id))
+    .orderBy(asc(signer.orderIndex));
+  const fields = await db.select().from(field).where(eq(field.documentId, id));
+  const pdfBase64 = toBase64(
+    await loadPdf(doc.originalPdf, doc.originalPdfKey),
+  );
+
+  return {
+    id: doc.id,
+    name: doc.name,
+    status: doc.status,
+    pdfBase64,
+    signers: signers.map((s) => ({
+      id: s.id,
+      name: s.name,
+      email: s.email,
+      color: s.color,
+      status: s.status,
+      orderIndex: s.orderIndex,
+    })),
+    fields: fields.map((f) => ({
+      id: f.id,
+      signerId: f.signerId,
+      type: f.type,
+      page: f.page,
+      x: f.x,
+      y: f.y,
+      width: f.width,
+      height: f.height,
+    })),
+  };
+};
+
+/**
+ * Replace a draft's fields, for a draft the owner owns (or shares through a
+ * workspace). Fields assigned to an unknown signer are stored unassigned.
+ * Returns false when the document is not an editable draft of the owner's.
+ */
+export const saveFieldsForOwner = async (
+  db: Db,
+  id: string,
+  ownerId: string,
+  workspaceIds: string[],
+  fields: EditorField[],
+): Promise<boolean> => {
+  const [doc] = await db
+    .select({ status: document.status })
+    .from(document)
+    .where(and(eq(document.id, id), ownerAccess(ownerId, workspaceIds)));
+  if (!doc || doc.status !== "draft") return false;
+
+  const signerRows = await db
+    .select({ id: signer.id })
+    .from(signer)
+    .where(eq(signer.documentId, id));
+  const validSigners = new Set(signerRows.map((s) => s.id));
+
+  await db.delete(field).where(eq(field.documentId, id));
+  if (fields.length > 0) {
+    await db.insert(field).values(
+      fields.map((f) => ({
+        documentId: id,
+        signerId:
+          f.signerId && validSigners.has(f.signerId) ? f.signerId : null,
+        type: f.type,
+        page: f.page,
+        x: f.x,
+        y: f.y,
+        width: f.width,
+        height: f.height,
+        source: "manual",
+      })),
+    );
+  }
+  return true;
+};
+
 export interface SendResult {
   documentName: string;
   signers: {

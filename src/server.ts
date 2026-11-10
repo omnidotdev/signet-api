@@ -15,6 +15,7 @@ import {
   verifyTransaction,
 } from "./lib/auth/session.ts";
 import { getDb, runMigrations } from "./lib/db/client.ts";
+import type { EditorField } from "./lib/documents/documentService.ts";
 import {
   addSignerToDraft,
   createDraft,
@@ -22,6 +23,7 @@ import {
   deleteOwnedDocument,
   getDocumentDetailForOwner,
   getEditorData,
+  getEditorDataForOwner,
   getSignedPdf,
   getSignedPdfForMember,
   getSignedPdfForSignToken,
@@ -32,6 +34,7 @@ import {
   removeSignerFromDraft,
   renameOwnedDocument,
   saveFields,
+  saveFieldsForOwner,
   sendDraft,
   sendOwnedDraft,
   signByToken,
@@ -465,6 +468,54 @@ if (hasDb) {
       }
       return { ok: true, reminded: result.signers.length };
     })
+    // editor data for a draft the signed-in owner owns
+    .get("/api/documents/:id/editor", async ({ params, session, set }) => {
+      if (!session) {
+        set.status = 401;
+        return { error: "unauthorized" };
+      }
+      const data = await getEditorDataForOwner(
+        db,
+        params.id,
+        session.sub,
+        (session.workspaces ?? []).map((w) => w.id),
+      );
+      if (!data) {
+        set.status = 404;
+        return { error: "not_found" };
+      }
+      return data;
+    })
+    // replace a draft's fields (signed-in owner)
+    .put(
+      "/api/documents/:id/fields",
+      async ({ params, body, session, set }) => {
+        if (!session) {
+          set.status = 401;
+          return { ok: false };
+        }
+        let fields: EditorField[] = [];
+        try {
+          fields = JSON.parse(body.fields) as EditorField[];
+        } catch {
+          set.status = 400;
+          return { ok: false };
+        }
+        const ok = await saveFieldsForOwner(
+          db,
+          params.id,
+          session.sub,
+          (session.workspaces ?? []).map((w) => w.id),
+          fields,
+        );
+        if (!ok) {
+          set.status = 404;
+          return { ok: false };
+        }
+        return { ok: true };
+      },
+      { body: t.Object({ fields: t.String() }) },
+    )
     // rename a document the signed-in owner owns
     .patch(
       "/api/documents/:id",

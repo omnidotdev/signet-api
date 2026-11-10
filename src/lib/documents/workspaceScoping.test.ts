@@ -7,9 +7,11 @@ import {
   createMultiSignerRequest,
   createSigningRequest,
   getDocumentDetailForOwner,
+  getEditorDataForOwner,
   getSignedPdfForMember,
   listWorkspaceDocuments,
   remindOwnedDocument,
+  saveFieldsForOwner,
   signByToken,
 } from "./documentService.ts";
 
@@ -80,6 +82,57 @@ describe("workspace-scoped documents", () => {
     // once signed, there is no one to remind
     await signByToken(db, serviceSigner, req.signToken, "Ada");
     expect(await remindOwnedDocument(db, req.id, "alice", [])).toBeNull();
+  });
+
+  test("the owner can load and replace a draft's fields", async () => {
+    const draft = await createMultiSignerRequest(db, {
+      name: "Draft",
+      pdf: await tinyPdf(),
+      signers: [{ name: "Ada" }],
+      ownerId: "alice",
+      draft: true,
+    });
+
+    const data = await getEditorDataForOwner(db, draft.id, "alice", []);
+    expect(data?.signers).toHaveLength(1);
+    expect(data?.pdfBase64.length).toBeGreaterThan(0);
+
+    // a non-owner cannot load the editor
+    expect(await getEditorDataForOwner(db, draft.id, "eve", [])).toBeNull();
+
+    const signerId = data?.signers[0]?.id as string;
+    const ok = await saveFieldsForOwner(
+      db,
+      draft.id,
+      "alice",
+      [],
+      [
+        {
+          signerId,
+          type: "signature",
+          page: 1,
+          x: 72,
+          y: 100,
+          width: 150,
+          height: 24,
+        },
+        {
+          signerId,
+          type: "date",
+          page: 1,
+          x: 240,
+          y: 100,
+          width: 100,
+          height: 24,
+        },
+      ],
+    );
+    expect(ok).toBe(true);
+
+    const after = await getEditorDataForOwner(db, draft.id, "alice", []);
+    expect(after?.fields).toHaveLength(2);
+    // a non-owner cannot save
+    expect(await saveFieldsForOwner(db, draft.id, "eve", [], [])).toBe(false);
   });
 
   test("a multi-signer document appears once, with its signer count", async () => {
