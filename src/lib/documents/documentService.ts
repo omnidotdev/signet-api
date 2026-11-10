@@ -450,6 +450,155 @@ export const sendOwnedDraft = async (
   return { documentName: doc.name, signers };
 };
 
+export interface DocumentDetail {
+  id: string;
+  name: string;
+  status: string;
+  createdAt: string;
+  signingMode: string;
+  hasSignedPdf: boolean;
+  signers: {
+    name: string;
+    email: string | null;
+    status: string;
+    orderIndex: number;
+    /** whether it is this signer's turn (parallel: always; sequential: in turn) */
+    active: boolean;
+  }[];
+  history: { type: string; timestamp: string; signer: string | null }[];
+  provenanceValid: boolean;
+  trustedTimestamp: DocumentStatus["trustedTimestamp"];
+}
+
+const ownerAccess = (ownerId: string, workspaceIds: string[]) => {
+  const access = [eq(document.ownerId, ownerId)];
+  if (workspaceIds.length > 0) {
+    access.push(inArray(document.organizationId, workspaceIds));
+  }
+  return or(...access);
+};
+
+/**
+ * Full status + signing history for a document the owner owns (or shares
+ * through a workspace), for the sender's tracking view. Null when not theirs.
+ */
+export const getDocumentDetailForOwner = async (
+  db: Db,
+  id: string,
+  ownerId: string,
+  workspaceIds: string[],
+): Promise<DocumentDetail | null> => {
+  const [doc] = await db
+    .select()
+    .from(document)
+    .where(and(eq(document.id, id), ownerAccess(ownerId, workspaceIds)));
+  if (!doc) return null;
+
+  const signers = await db
+    .select()
+    .from(signer)
+    .where(eq(signer.documentId, id))
+    .orderBy(asc(signer.orderIndex));
+  const firstUnsigned = signers.find((s) => s.status !== "signed")?.orderIndex;
+
+  const events = await db
+    .select()
+    .from(signatureEvent)
+    .where(eq(signatureEvent.documentId, id))
+    .orderBy(asc(signatureEvent.index));
+  const chain: ProvenanceEvent[] = events.map((r) => ({
+    index: r.index,
+    timestamp: r.createdAt.toISOString(),
+    type: r.type,
+    data: r.data as Record<string, unknown>,
+    prevHash: r.prevHash,
+    hash: r.hash,
+  }));
+
+  return {
+    id: doc.id,
+    name: doc.name,
+    status: doc.status,
+    createdAt: doc.createdAt.toISOString(),
+    signingMode: doc.signingMode,
+    hasSignedPdf: doc.signedPdf !== null || doc.signedPdfKey !== null,
+    signers: signers.map((s) => ({
+      name: s.name,
+      email: s.email,
+      status: s.status,
+      orderIndex: s.orderIndex,
+      active:
+        doc.signingMode !== "sequential" || s.orderIndex === firstUnsigned,
+    })),
+    history: chain.map((e) => ({
+      type: e.type,
+      timestamp: e.timestamp,
+      signer:
+        typeof (e.data as { signer?: unknown }).signer === "string"
+          ? ((e.data as { signer: string }).signer ?? null)
+          : null,
+    })),
+    provenanceValid: verifyLedger(chain).valid,
+    trustedTimestamp: trustedTimestampFrom(chain),
+  };
+};
+
+/**
+ * The pending signers to remind now for a document the owner owns: those not
+ * yet signed and currently active (sequential: only the current signer), with
+ * an email. Stamps lastReminderAt. Null when the document is not the owner's or
+ * not awaiting signatures.
+ */
+export const remindOwnedDocument = async (
+  db: Db,
+  id: string,
+  ownerId: string,
+  workspaceIds: string[],
+): Promise<{
+  documentName: string;
+  signers: { name: string; email: string; signToken: string }[];
+} | null> => {
+  const [doc] = await db
+    .select()
+    .from(document)
+    .where(and(eq(document.id, id), ownerAccess(ownerId, workspaceIds)));
+  if (!doc || doc.status !== "sent") return null;
+
+  const signers = await db
+    .select()
+    .from(signer)
+    .where(eq(signer.documentId, id))
+    .orderBy(asc(signer.orderIndex));
+  const firstUnsigned = signers.find((s) => s.status !== "signed")?.orderIndex;
+
+  const pending = signers.filter(
+    (s) =>
+      s.status !== "signed" &&
+      s.email &&
+      (doc.signingMode !== "sequential" || s.orderIndex === firstUnsigned),
+  );
+  if (pending.length === 0) return null;
+
+  await db
+    .update(signer)
+    .set({ lastReminderAt: new Date() })
+    .where(
+      inArray(
+        signer.id,
+        pending.map((s) => s.id),
+      ),
+    );
+
+  return {
+    documentName: doc.name,
+    signers: pending.map((s) => ({
+      name: s.name,
+      email: s.email as string,
+      signToken: s.signToken,
+    })),
+  };
+};
+
 /**
  * Rename a document the owner owns (or shares through a workspace). Returns the
  * new name on success, or null when the owner may not rename it or the name is

@@ -6,8 +6,10 @@ import { generateSelfSignedPkcs12 } from "../signing/signerIdentity.ts";
 import {
   createMultiSignerRequest,
   createSigningRequest,
+  getDocumentDetailForOwner,
   getSignedPdfForMember,
   listWorkspaceDocuments,
+  remindOwnedDocument,
   signByToken,
 } from "./documentService.ts";
 
@@ -49,6 +51,35 @@ describe("workspace-scoped documents", () => {
     // Alice viewing ws-a sees: ws-a docs (both) + her unfiled one; never ws-b
     const docs = await listWorkspaceDocuments(db, "alice", "ws-a");
     expect(docs).toHaveLength(3);
+  });
+
+  test("the owner can see status and history, and resend a reminder", async () => {
+    const req = await createSigningRequest(db, {
+      name: "Agreement",
+      pdf: await tinyPdf(),
+      signerName: "Ada",
+      signerEmail: "ada@example.com",
+      ownerId: "alice",
+    });
+
+    const mine = await getDocumentDetailForOwner(db, req.id, "alice", []);
+    expect(mine?.status).toBe("sent");
+    expect(mine?.signers[0]?.active).toBe(true);
+    expect(mine?.history.map((h) => h.type)).toContain("document.created");
+    expect(mine?.provenanceValid).toBe(true);
+
+    // a non-owner sees nothing
+    expect(
+      await getDocumentDetailForOwner(db, req.id, "mallory", []),
+    ).toBeNull();
+
+    const remind = await remindOwnedDocument(db, req.id, "alice", []);
+    expect(remind?.signers).toHaveLength(1);
+    expect(remind?.signers[0]?.email).toBe("ada@example.com");
+
+    // once signed, there is no one to remind
+    await signByToken(db, serviceSigner, req.signToken, "Ada");
+    expect(await remindOwnedDocument(db, req.id, "alice", [])).toBeNull();
   });
 
   test("a multi-signer document appears once, with its signer count", async () => {
