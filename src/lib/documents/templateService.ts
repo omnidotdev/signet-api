@@ -88,6 +88,7 @@ export const createDraftFromTemplate = async (
   ownerId: string,
   signers: DraftSignerInput[],
   ownerEmail?: string,
+  organizationId?: string,
 ): Promise<DraftRequest | null> => {
   const [tpl] = await db
     .select()
@@ -102,6 +103,7 @@ export const createDraftFromTemplate = async (
     signers,
     ownerId,
     ownerEmail,
+    organizationId,
     fields: tpl.fields ?? [],
   });
 };

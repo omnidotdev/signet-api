@@ -242,6 +242,7 @@ if (hasDb) {
           signerName: body.signerName,
           signerEmail: body.signerEmail,
           ownerId: session?.sub,
+          organizationId: session?.organizationId,
           ownerEmail: session?.email,
         });
         const signUrl = `${baseUrl}/sign/${req.signToken}`;
@@ -301,6 +302,7 @@ if (hasDb) {
           signingMode:
             body.signingMode === "sequential" ? "sequential" : "parallel",
           ownerId: session?.sub,
+          organizationId: session?.organizationId,
           ownerEmail: session?.email,
         });
         set.status = 201;
@@ -533,6 +535,7 @@ if (hasDb) {
             session.sub,
             signers,
             session.email,
+            session.organizationId,
           );
           if (!draft) {
             set.status = 404;

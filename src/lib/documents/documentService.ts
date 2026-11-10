@@ -92,6 +92,8 @@ export interface CreateSigningRequestInput {
   /** Gatekeeper subject of the signed-in sender, omitted for anonymous sends */
   ownerId?: string;
   ownerEmail?: string;
+  /** workspace (organization) the document belongs to */
+  organizationId?: string;
 }
 
 export interface SigningRequest {
@@ -122,6 +124,7 @@ export const createSigningRequest = async (
       originalPdfKey: storedOriginal.key,
       manageToken,
       ownerId: input.ownerId ?? null,
+      organizationId: input.organizationId ?? null,
       ownerEmail: input.ownerEmail ?? null,
     })
     .returning({ id: document.id });
@@ -207,6 +210,8 @@ export interface CreateDraftInput {
   signingMode?: "parallel" | "sequential";
   /** pre-set fields (from a template); when omitted, fields are auto-detected */
   fields?: TemplateField[];
+  /** workspace (organization) the document belongs to */
+  organizationId?: string;
 }
 
 export interface DraftRequest {
@@ -241,6 +246,7 @@ export const createDraft = async (
       signingMode:
         input.signingMode === "sequential" ? "sequential" : "parallel",
       ownerId: input.ownerId ?? null,
+      organizationId: input.organizationId ?? null,
       ownerEmail: input.ownerEmail ?? null,
     })
     .returning({ id: document.id });
