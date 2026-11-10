@@ -15,6 +15,7 @@ import { detectFields } from "../fields/detect.ts";
 import { initialsOf, stampFields } from "../fields/stamp.ts";
 import type { ProvenanceEvent } from "../provenance/ledger.ts";
 import { appendEvent, verifyLedger } from "../provenance/ledger.ts";
+import { requestTimestamp } from "../provenance/timestamp.ts";
 import { signPdf } from "../signing/pdfSigner.ts";
 import type { ServiceSigner } from "../signing/signerIdentity.ts";
 import {
@@ -956,9 +957,23 @@ export const signByToken = async (
         updatedAt: new Date(),
       })
       .where(eq(document.id, doc.id));
+    // anchor the sealed document to a trusted time (best-effort: a TSA outage or
+    // no SIGNET_TSA_URL still seals, just without a trusted timestamp)
+    const timestamp = await requestTimestamp(signed);
     await appendProvenance(db, doc.id, {
       type: "document.completed",
-      data: { signers: signers.length },
+      data: {
+        signers: signers.length,
+        ...(timestamp
+          ? {
+              timestamp: {
+                token: timestamp.token,
+                genTime: timestamp.genTime,
+                tsa: timestamp.tsa,
+              },
+            }
+          : {}),
+      },
     });
     emitDocumentCompleted({
       documentId: doc.id,
@@ -994,7 +1009,21 @@ export interface DocumentStatus {
   createdAt: string;
   signers: { name: string; email: string | null; status: string }[];
   provenanceValid: boolean;
+  /** the TSA-asserted trusted time the sealed document was timestamped, if any */
+  trustedTimestamp: { genTime: string | null; tsa: string } | null;
 }
+
+/** Pull the trusted timestamp recorded on the document.completed event, if any */
+const trustedTimestampFrom = (
+  chain: ProvenanceEvent[],
+): DocumentStatus["trustedTimestamp"] => {
+  const completed = chain.find((e) => e.type === "document.completed");
+  const ts = (
+    completed?.data as { timestamp?: { genTime?: string; tsa?: string } }
+  )?.timestamp;
+  if (!ts?.tsa) return null;
+  return { genTime: ts.genTime ?? null, tsa: ts.tsa };
+};
 
 /** Load status for a manage token, including signer states and ledger integrity */
 export const getStatus = async (
@@ -1040,6 +1069,7 @@ export const getStatus = async (
       status: s.status,
     })),
     provenanceValid: verifyLedger(chain).valid,
+    trustedTimestamp: trustedTimestampFrom(chain),
   };
 };
 
