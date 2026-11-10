@@ -70,6 +70,10 @@ const ROOT_CA_PATH = requireFile.resolve("../certs/omni-signing-root-ca.pem");
 const signer = loadServiceSigner();
 const port = Number(process.env.PORT ?? 3000);
 const baseUrl = process.env.PUBLIC_BASE_URL ?? `http://localhost:${port}`;
+// Signer links are hosted by the signet-app front end (a clean, native page on
+// the app origin) rather than this API's own host. Falls back to the API when
+// unset, so the API still works standalone
+const appBaseUrl = process.env.SIGNET_APP_URL ?? baseUrl;
 const hasDb = Boolean(process.env.DATABASE_URL);
 
 const authConfig = loadAuthConfig(baseUrl);
@@ -259,7 +263,7 @@ if (hasDb) {
   if (reminderHours > 0) {
     const intervalMs = reminderHours * 60 * 60 * 1000;
     const sweep = () =>
-      runReminders(db, baseUrl, intervalMs, sendSignatureRequestEmail).catch(
+      runReminders(db, appBaseUrl, intervalMs, sendSignatureRequestEmail).catch(
         (err) => console.warn("[signet] reminder sweep failed", err),
       );
     setInterval(sweep, 60 * 60 * 1000).unref();
@@ -297,7 +301,7 @@ if (hasDb) {
           organizationId: session?.organizationId,
           ownerEmail: session?.email,
         });
-        const signUrl = `${baseUrl}/sign/${req.signToken}`;
+        const signUrl = `${appBaseUrl}/sign/${req.signToken}`;
         if (body.signerEmail) {
           await sendSignatureRequestEmail({
             to: body.signerEmail,
@@ -418,7 +422,7 @@ if (hasDb) {
         return { ok: false };
       }
       const signers = result.signers.map((s) => {
-        const signUrl = `${baseUrl}/sign/${s.signToken}`;
+        const signUrl = `${appBaseUrl}/sign/${s.signToken}`;
         // in sequential mode only the active (first) signer is emailed now
         if (s.email && s.active) {
           void sendSignatureRequestEmail({
@@ -499,6 +503,15 @@ if (hasDb) {
       }
       return { ok: true, id: result.id };
     })
+    // signer fill data as JSON, for the native signer page on the app origin
+    .get("/api/sign/:token", async ({ params, set }) => {
+      const data = await getSignerFillData(db, params.token);
+      if (!data) {
+        set.status = 404;
+        return { error: "not_found" };
+      }
+      return data;
+    })
     // signer-facing fill overlay
     .get("/sign/:token", async ({ params }) => {
       const data = await getSignerFillData(db, params.token);
@@ -529,7 +542,7 @@ if (hasDb) {
             to: result.notifySigner.email,
             signerName: result.notifySigner.name,
             documentName: result.notifySigner.documentName,
-            signUrl: `${baseUrl}/sign/${result.notifySigner.signToken}`,
+            signUrl: `${appBaseUrl}/sign/${result.notifySigner.signToken}`,
           });
         }
         return { ok: true, completed: result.completed };
