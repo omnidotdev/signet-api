@@ -11,6 +11,7 @@ import {
   emitDocumentVoided,
   emitSignatureCompleted,
 } from "../events/signetEvents.ts";
+import type { DetectedField } from "../fields/detect.ts";
 import { detectFields } from "../fields/detect.ts";
 import { initialsOf, stampFields } from "../fields/stamp.ts";
 import type { ProvenanceEvent } from "../provenance/ledger.ts";
@@ -200,6 +201,181 @@ export interface DraftSignerInput {
   name: string;
   email?: string;
 }
+
+export interface MultiSignerRequestInput {
+  name: string;
+  pdf: Uint8Array;
+  signers: DraftSignerInput[];
+  /** "sequential" to require signing in order, else "parallel" (any order) */
+  signingMode?: "parallel" | "sequential";
+  /** Gatekeeper subject of the signed-in sender, omitted for anonymous sends */
+  ownerId?: string;
+  ownerEmail?: string;
+  /** workspace (organization) the document belongs to */
+  organizationId?: string;
+}
+
+export interface MultiSignerRequest {
+  id: string;
+  manageToken: string;
+  signers: {
+    name: string;
+    email: string | null;
+    signToken: string;
+    orderIndex: number;
+  }[];
+}
+
+/**
+ * Assign detected fields to signers for an unattended multi-signer send (no
+ * field editor). Signature and initials fields are handed out top-to-bottom,
+ * round-robin across the signers, so each party gets their own signing line in
+ * a standard multi-party block. A date or text field is paired to the nearest
+ * signature on its page (so a party's date fills when they sign), else to the
+ * first signer. Returns the signer index for each detected field.
+ */
+const autoAssignSigners = (
+  fields: DetectedField[],
+  signerCount: number,
+): number[] => {
+  const sigOrder = fields
+    .map((f, i) => ({ f, i }))
+    .filter(({ f }) => f.type === "signature" || f.type === "initials")
+    .sort((a, b) => a.f.page - b.f.page || b.f.y - a.f.y);
+  const indexToSigner = new Map<number, number>();
+  sigOrder.forEach(({ i }, rank) => {
+    indexToSigner.set(i, rank % signerCount);
+  });
+  return fields.map((f, i) => {
+    const direct = indexToSigner.get(i);
+    if (direct !== undefined) return direct;
+    // nearest signature on the same page
+    let best: number | null = null;
+    let bestDist = Number.POSITIVE_INFINITY;
+    for (const { f: s, i: si } of sigOrder) {
+      if (s.page !== f.page) continue;
+      const d = Math.abs(s.y - f.y);
+      if (d < bestDist) {
+        bestDist = d;
+        best = indexToSigner.get(si) ?? 0;
+      }
+    }
+    return best ?? 0;
+  });
+};
+
+/**
+ * Create and immediately send a document to one or more signers, auto-detecting
+ * fields and assigning each party their own signing line. Unlike createDraft,
+ * this skips the field editor (nothing is placed by hand), so a sender can send
+ * a standard multi-party document straight from the upload surface.
+ */
+export const createMultiSignerRequest = async (
+  db: Db,
+  input: MultiSignerRequestInput,
+): Promise<MultiSignerRequest> => {
+  const id = randomUUID();
+  const manageToken = generateToken();
+  const contentHash = sha256(input.pdf);
+  const storedOriginal = await storePdf(originalKey(id), input.pdf);
+  const signingMode =
+    input.signingMode === "sequential" ? "sequential" : "parallel";
+
+  const [doc] = await db
+    .insert(document)
+    .values({
+      id,
+      name: input.name,
+      status: "sent",
+      contentHash,
+      originalPdf: storedOriginal.inline,
+      originalPdfKey: storedOriginal.key,
+      manageToken,
+      signingMode,
+      ownerId: input.ownerId ?? null,
+      organizationId: input.organizationId ?? null,
+      ownerEmail: input.ownerEmail ?? null,
+    })
+    .returning({ id: document.id });
+  if (!doc) throw new Error("failed to create document");
+
+  const signerRows = await db
+    .insert(signer)
+    .values(
+      input.signers.map((s, i) => ({
+        documentId: doc.id,
+        name: s.name,
+        email: s.email ?? null,
+        signToken: generateToken(),
+        status: "pending",
+        orderIndex: i,
+        color: SIGNER_COLORS[i % SIGNER_COLORS.length],
+      })),
+    )
+    .returning({
+      id: signer.id,
+      name: signer.name,
+      email: signer.email,
+      signToken: signer.signToken,
+      orderIndex: signer.orderIndex,
+    });
+
+  const detected = await detectFields(input.pdf);
+  if (detected.length > 0) {
+    const assignment = autoAssignSigners(detected, signerRows.length);
+    await db.insert(field).values(
+      detected.map((f, i) => ({
+        documentId: doc.id,
+        signerId: signerRows[assignment[i] ?? 0]?.id ?? signerRows[0]?.id,
+        type: f.type,
+        page: f.page,
+        x: f.x,
+        y: f.y,
+        width: f.width,
+        height: f.height,
+        source: "detected",
+      })),
+    );
+  }
+
+  await appendProvenance(db, doc.id, {
+    type: "document.created",
+    data: {
+      name: input.name,
+      contentHash,
+      signers: input.signers.length,
+      fields: detected.length,
+    },
+  });
+
+  const ownerId = input.ownerId ?? null;
+  emitDocumentCreated({
+    documentId: doc.id,
+    name: input.name,
+    ownerId,
+    signerCount: input.signers.length,
+    signingMode,
+    fieldCount: detected.length,
+  });
+  emitDocumentSent({
+    documentId: doc.id,
+    name: input.name,
+    ownerId,
+    signerCount: input.signers.length,
+    signingMode,
+  });
+
+  return {
+    id: doc.id,
+    manageToken,
+    signers: signerRows.map((s) => ({
+      name: s.name,
+      email: s.email,
+      signToken: s.signToken,
+      orderIndex: s.orderIndex,
+    })),
+  };
+};
 
 export interface CreateDraftInput {
   name: string;
