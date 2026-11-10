@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { and, asc, desc, eq, lt, ne } from "drizzle-orm";
 import type { Db } from "../db/client.ts";
 import type { TemplateField } from "../db/schema.ts";
@@ -17,6 +17,12 @@ import type { ProvenanceEvent } from "../provenance/ledger.ts";
 import { appendEvent, verifyLedger } from "../provenance/ledger.ts";
 import { signPdf } from "../signing/pdfSigner.ts";
 import type { ServiceSigner } from "../signing/signerIdentity.ts";
+import {
+  loadPdf,
+  originalKey,
+  signedKey,
+  storePdf,
+} from "../storage/pdfStore.ts";
 
 const sha256 = (bytes: Uint8Array): string =>
   createHash("sha256").update(bytes).digest("hex");
@@ -99,17 +105,21 @@ export const createSigningRequest = async (
   db: Db,
   input: CreateSigningRequestInput,
 ): Promise<SigningRequest> => {
+  const id = randomUUID();
   const manageToken = generateToken();
   const signToken = generateToken();
   const contentHash = sha256(input.pdf);
+  const storedOriginal = await storePdf(originalKey(id), input.pdf);
 
   const [doc] = await db
     .insert(document)
     .values({
+      id,
       name: input.name,
       status: "sent",
       contentHash,
-      originalPdf: toBase64(input.pdf),
+      originalPdf: storedOriginal.inline,
+      originalPdfKey: storedOriginal.key,
       manageToken,
       ownerId: input.ownerId ?? null,
       ownerEmail: input.ownerEmail ?? null,
@@ -213,16 +223,20 @@ export const createDraft = async (
   db: Db,
   input: CreateDraftInput,
 ): Promise<DraftRequest> => {
+  const id = randomUUID();
   const manageToken = generateToken();
   const contentHash = sha256(input.pdf);
+  const storedOriginal = await storePdf(originalKey(id), input.pdf);
 
   const [doc] = await db
     .insert(document)
     .values({
+      id,
       name: input.name,
       status: "draft",
       contentHash,
-      originalPdf: toBase64(input.pdf),
+      originalPdf: storedOriginal.inline,
+      originalPdfKey: storedOriginal.key,
       manageToken,
       signingMode:
         input.signingMode === "sequential" ? "sequential" : "parallel",
@@ -335,12 +349,15 @@ export const getEditorData = async (
     .where(eq(signer.documentId, id))
     .orderBy(asc(signer.orderIndex));
   const fields = await db.select().from(field).where(eq(field.documentId, id));
+  const pdfBase64 = toBase64(
+    await loadPdf(doc.originalPdf, doc.originalPdfKey),
+  );
 
   return {
     id: doc.id,
     name: doc.name,
     status: doc.status,
-    pdfBase64: doc.originalPdf,
+    pdfBase64,
     signers: signers.map((s) => ({
       id: s.id,
       name: s.name,
@@ -562,6 +579,7 @@ export const getSignerFillData = async (
       documentStatus: document.status,
       signingMode: document.signingMode,
       originalPdf: document.originalPdf,
+      originalPdfKey: document.originalPdfKey,
       signerId: signer.id,
       signerName: signer.name,
       signerStatus: signer.status,
@@ -613,6 +631,9 @@ export const getSignerFillData = async (
     })
     .from(field)
     .where(eq(field.signerId, row.signerId));
+  const pdfBase64 = toBase64(
+    await loadPdf(row.originalPdf, row.originalPdfKey),
+  );
 
   return {
     documentName: row.documentName,
@@ -620,7 +641,7 @@ export const getSignerFillData = async (
     alreadySigned:
       row.documentStatus === "completed" || row.signerStatus === "signed",
     waitingFor,
-    pdfBase64: row.originalPdf,
+    pdfBase64,
     fields,
   };
 };
@@ -766,16 +787,19 @@ export const signByToken = async (
         image: drawn ? fromBase64(drawn) : null,
       };
     });
-    const stamped = await stampFields(fromBase64(doc.originalPdf), items);
+    const original = await loadPdf(doc.originalPdf, doc.originalPdfKey);
+    const stamped = await stampFields(original, items);
     const signed = await signPdf(stamped, serviceSigner.pkcs12, {
       name: serviceSigner.commonName,
       reason: "Signed via Signet",
       passphrase: serviceSigner.passphrase,
     });
+    const storedSigned = await storePdf(signedKey(doc.id), signed);
     await db
       .update(document)
       .set({
-        signedPdf: toBase64(signed),
+        signedPdf: storedSigned.inline,
+        signedPdfKey: storedSigned.key,
         status: "completed",
         updatedAt: new Date(),
       })
@@ -877,8 +901,8 @@ export const getSignedPdf = async (
     .select()
     .from(document)
     .where(and(eq(document.id, id), eq(document.manageToken, manageToken)));
-  if (!doc?.signedPdf) return null;
-  return fromBase64(doc.signedPdf);
+  if (!doc || (!doc.signedPdf && !doc.signedPdfKey)) return null;
+  return loadPdf(doc.signedPdf ?? "", doc.signedPdfKey);
 };
 
 /** Return the signed PDF for a signer's own sign token, or null if not signed */
@@ -887,12 +911,15 @@ export const getSignedPdfForSignToken = async (
   signToken: string,
 ): Promise<Uint8Array | null> => {
   const [row] = await db
-    .select({ signedPdf: document.signedPdf })
+    .select({
+      signedPdf: document.signedPdf,
+      signedPdfKey: document.signedPdfKey,
+    })
     .from(signer)
     .innerJoin(document, eq(signer.documentId, document.id))
     .where(eq(signer.signToken, signToken));
-  if (!row?.signedPdf) return null;
-  return fromBase64(row.signedPdf);
+  if (!row || (!row.signedPdf && !row.signedPdfKey)) return null;
+  return loadPdf(row.signedPdf ?? "", row.signedPdfKey);
 };
 
 export interface OwnerDocument {
@@ -923,6 +950,7 @@ export const listDocumentsByOwner = async (
       createdAt: document.createdAt,
       manageToken: document.manageToken,
       signedPdf: document.signedPdf,
+      signedPdfKey: document.signedPdfKey,
       signerName: signer.name,
       signerStatus: signer.status,
     })
@@ -937,7 +965,7 @@ export const listDocumentsByOwner = async (
     status: r.status,
     createdAt: r.createdAt.toISOString(),
     manageToken: r.manageToken,
-    hasSignedPdf: r.signedPdf !== null,
+    hasSignedPdf: r.signedPdf !== null || r.signedPdfKey !== null,
     signerName: r.signerName,
     signerStatus: r.signerStatus,
   }));
@@ -950,11 +978,14 @@ export const getSignedPdfForOwner = async (
   ownerId: string,
 ): Promise<Uint8Array | null> => {
   const [doc] = await db
-    .select({ signedPdf: document.signedPdf })
+    .select({
+      signedPdf: document.signedPdf,
+      signedPdfKey: document.signedPdfKey,
+    })
     .from(document)
     .where(and(eq(document.id, id), eq(document.ownerId, ownerId)));
-  if (!doc?.signedPdf) return null;
-  return fromBase64(doc.signedPdf);
+  if (!doc || (!doc.signedPdf && !doc.signedPdfKey)) return null;
+  return loadPdf(doc.signedPdf ?? "", doc.signedPdfKey);
 };
 
 /** Void a document so it can no longer be signed */

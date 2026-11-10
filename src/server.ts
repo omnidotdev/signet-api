@@ -38,6 +38,7 @@ import { sendSignatureRequestEmail } from "./lib/email/signatureRequestEmail.ts"
 import { runReminders } from "./lib/reminders/reminderJob.ts";
 import { signPdf } from "./lib/signing/pdfSigner.ts";
 import { loadServiceSigner } from "./lib/signing/signerIdentity.ts";
+import { pdfStorageEnabled } from "./lib/storage/pdfStore.ts";
 import { editorPage } from "./lib/ui/editorPage.ts";
 import {
   authBar,
@@ -115,6 +116,7 @@ const app = new Elysia()
     signer: signer.commonName,
     db: hasDb,
     auth: authEnabled,
+    objectStorage: pdfStorageEnabled(),
   }))
   // pdf.js assets for the editor
   .get("/assets/pdf/pdf.min.mjs", () => js(PDFJS_MAIN))

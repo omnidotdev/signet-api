@@ -57,6 +57,13 @@
       "when": 1794259554157,
       "tag": "0007_fair_ghost_rider",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1794284587792,
+      "tag": "0008_first_jimmy_woo",
+      "breakpoints": true
     }
   ]
 }
