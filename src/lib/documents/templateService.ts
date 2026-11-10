@@ -7,6 +7,7 @@ import { and, desc, eq } from "drizzle-orm";
 import type { Db } from "../db/client.ts";
 import type { TemplateField } from "../db/schema.ts";
 import { document, field, template } from "../db/schema.ts";
+import { loadPdf } from "../storage/pdfStore.ts";
 import type { DraftRequest, DraftSignerInput } from "./documentService.ts";
 import { createDraft } from "./documentService.ts";
 
@@ -38,12 +39,16 @@ export const saveTemplateFromDraft = async (
     height: f.height,
   }));
 
+  // the template keeps the PDF inline (base64); load it from object storage
+  // first when the source document's bytes were externalized
+  const pdfBytes = await loadPdf(doc.originalPdf, doc.originalPdfKey);
+
   const [row] = await db
     .insert(template)
     .values({
       name: doc.name,
       ownerId: doc.ownerId,
-      pdfBase64: doc.originalPdf,
+      pdfBase64: Buffer.from(pdfBytes).toString("base64"),
       fields: layout,
     })
     .returning({ id: template.id });

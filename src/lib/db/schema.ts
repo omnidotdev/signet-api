@@ -16,10 +16,14 @@ export const document = pgTable("document", {
   /** draft | sent | completed | voided */
   status: text("status").notNull().default("draft"),
   contentHash: text("content_hash").notNull(),
-  /** base64-encoded original PDF */
+  /** base64-encoded original PDF, empty when stored in object storage */
   originalPdf: text("original_pdf").notNull(),
-  /** base64-encoded signed PDF, null until signed */
+  /** object-storage key for the original PDF, null when stored inline */
+  originalPdfKey: text("original_pdf_key"),
+  /** base64-encoded signed PDF, null until signed, empty when in object storage */
   signedPdf: text("signed_pdf"),
+  /** object-storage key for the signed PDF, null when stored inline */
+  signedPdfKey: text("signed_pdf_key"),
   /** capability token for the sender to track and manage the request */
   manageToken: text("manage_token").notNull(),
   /** parallel (any order) | sequential (one signer at a time by orderIndex) */
