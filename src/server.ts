@@ -22,6 +22,7 @@ import {
   createMultiSignerRequest,
   deleteOwnedDocument,
   getDocumentDetailForOwner,
+  getDocumentFileForOwner,
   getEditorData,
   getEditorDataForOwner,
   getSignedPdf,
@@ -441,6 +442,28 @@ if (hasDb) {
         return { error: "not_found" };
       }
       return detail;
+    })
+    // the document file (signed if sealed, else the original) for the owner, so
+    // a sender can open any document from their history at any stage
+    .get("/api/documents/:id/file", async ({ params, session, set }) => {
+      if (!session) {
+        set.status = 401;
+        return { error: "unauthorized" };
+      }
+      const file = await getDocumentFileForOwner(
+        db,
+        params.id,
+        session.sub,
+        (session.workspaces ?? []).map((w) => w.id),
+      );
+      if (!file) {
+        set.status = 404;
+        return { error: "not_found" };
+      }
+      return pdfResponse(
+        file.bytes,
+        file.signed ? "signed.pdf" : "document.pdf",
+      );
     })
     // resend the signing reminder to pending signers (owner-scoped)
     .post("/api/documents/:id/remind", async ({ params, session, set }) => {
