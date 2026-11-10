@@ -38,6 +38,9 @@ const memoryBackend = () => {
       objects.set(key, bytes);
     },
     get: async (key) => objects.get(key) ?? null,
+    delete: async (key) => {
+      objects.delete(key);
+    },
   };
   return { backend, objects };
 };

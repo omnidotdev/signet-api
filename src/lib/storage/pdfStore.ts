@@ -17,6 +17,7 @@
  */
 
 import {
+  DeleteObjectCommand,
   GetObjectCommand,
   PutObjectCommand,
   S3Client,
@@ -31,6 +32,7 @@ const fromBase64 = (b64: string): Uint8Array =>
 export interface PdfBackend {
   put(key: string, bytes: Uint8Array): Promise<void>;
   get(key: string): Promise<Uint8Array | null>;
+  delete(key: string): Promise<void>;
 }
 
 const s3Backend = (): PdfBackend | null => {
@@ -71,6 +73,9 @@ const s3Backend = (): PdfBackend | null => {
       );
       if (!res.Body) return null;
       return res.Body.transformToByteArray();
+    },
+    delete: async (key) => {
+      await s3.send(new DeleteObjectCommand({ Bucket: S3_BUCKET, Key: key }));
     },
   };
 };
@@ -130,4 +135,9 @@ export const loadPdf = async (
     if (bytes) return bytes;
   }
   return fromBase64(inline);
+};
+
+/** Delete a stored object by key. A noop when storage is inline (no key). */
+export const deletePdf = async (key: string): Promise<void> => {
+  if (backend) await backend.delete(key);
 };

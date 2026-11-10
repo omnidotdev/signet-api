@@ -11,9 +11,11 @@ import { generateSelfSignedPkcs12 } from "../signing/signerIdentity.ts";
 import {
   createMultiSignerRequest,
   createSigningRequest,
+  deleteOwnedDocument,
   getSignedPdf,
   getSignerView,
   getStatus,
+  sendOwnedDraft,
   signByToken,
   voidDocument,
 } from "./documentService.ts";
@@ -130,6 +132,42 @@ describe("multi-signer send", () => {
     expect(req.signers).toHaveLength(2);
     const status = await getStatus(db, req.id, req.manageToken);
     expect(status?.status).toBe("sent");
+  });
+});
+
+describe("drafts (save, send, delete) for an owner", () => {
+  test("saving a draft does not send it; the owner can send it later", async () => {
+    const req = await createMultiSignerRequest(db, {
+      name: "Draft Agreement",
+      pdf,
+      signers: [{ name: "Ada", email: "ada@example.com" }],
+      ownerId: "owner-1",
+      draft: true,
+    });
+    const before = await getStatus(db, req.id, req.manageToken);
+    expect(before?.status).toBe("draft");
+
+    // a different owner cannot send it
+    expect(await sendOwnedDraft(db, req.id, "intruder", [])).toBeNull();
+
+    const sent = await sendOwnedDraft(db, req.id, "owner-1", []);
+    expect(sent).not.toBeNull();
+    expect(sent?.signers).toHaveLength(1);
+    const after = await getStatus(db, req.id, req.manageToken);
+    expect(after?.status).toBe("sent");
+  });
+
+  test("the owner can delete their document, others cannot", async () => {
+    const req = await createMultiSignerRequest(db, {
+      name: "Disposable",
+      pdf,
+      signers: [{ name: "Ada" }],
+      ownerId: "owner-1",
+      draft: true,
+    });
+    expect(await deleteOwnedDocument(db, req.id, "intruder", [])).toBe(false);
+    expect(await deleteOwnedDocument(db, req.id, "owner-1", [])).toBe(true);
+    expect(await getStatus(db, req.id, req.manageToken)).toBeNull();
   });
 });
 

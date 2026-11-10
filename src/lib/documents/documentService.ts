@@ -20,6 +20,7 @@ import { requestTimestamp } from "../provenance/timestamp.ts";
 import { signPdf } from "../signing/pdfSigner.ts";
 import type { ServiceSigner } from "../signing/signerIdentity.ts";
 import {
+  deletePdf,
   loadPdf,
   originalKey,
   signedKey,
@@ -213,6 +214,8 @@ export interface MultiSignerRequestInput {
   ownerEmail?: string;
   /** workspace (organization) the document belongs to */
   organizationId?: string;
+  /** save as an unsent draft (status "draft") instead of sending now */
+  draft?: boolean;
 }
 
 export interface MultiSignerRequest {
@@ -280,13 +283,14 @@ export const createMultiSignerRequest = async (
   const storedOriginal = await storePdf(originalKey(id), input.pdf);
   const signingMode =
     input.signingMode === "sequential" ? "sequential" : "parallel";
+  const isDraft = input.draft === true;
 
   const [doc] = await db
     .insert(document)
     .values({
       id,
       name: input.name,
-      status: "sent",
+      status: isDraft ? "draft" : "sent",
       contentHash,
       originalPdf: storedOriginal.inline,
       originalPdfKey: storedOriginal.key,
@@ -357,13 +361,20 @@ export const createMultiSignerRequest = async (
     signingMode,
     fieldCount: detected.length,
   });
-  emitDocumentSent({
-    documentId: doc.id,
-    name: input.name,
-    ownerId,
-    signerCount: input.signers.length,
-    signingMode,
-  });
+  // a draft is saved but not sent; it emits document.sent only when sent later
+  if (!isDraft) {
+    await db
+      .update(document)
+      .set({ sentAt: new Date() })
+      .where(eq(document.id, doc.id));
+    emitDocumentSent({
+      documentId: doc.id,
+      name: input.name,
+      ownerId,
+      signerCount: input.signers.length,
+      signingMode,
+    });
+  }
 
   return {
     id: doc.id,
@@ -375,6 +386,104 @@ export const createMultiSignerRequest = async (
       orderIndex: s.orderIndex,
     })),
   };
+};
+
+/**
+ * Send a draft the owner owns (or shares through a workspace): flip it to sent,
+ * stamp sentAt, and return each signer so the caller can email them. Null when
+ * the document is not a draft the owner may send.
+ */
+export const sendOwnedDraft = async (
+  db: Db,
+  id: string,
+  ownerId: string,
+  workspaceIds: string[],
+): Promise<SendResult | null> => {
+  const access = [eq(document.ownerId, ownerId)];
+  if (workspaceIds.length > 0) {
+    access.push(inArray(document.organizationId, workspaceIds));
+  }
+  const [doc] = await db
+    .select({
+      status: document.status,
+      signingMode: document.signingMode,
+      name: document.name,
+      ownerId: document.ownerId,
+    })
+    .from(document)
+    .where(and(eq(document.id, id), or(...access)));
+  if (!doc || doc.status !== "draft") return null;
+
+  const now = new Date();
+  await db
+    .update(document)
+    .set({ status: "sent", sentAt: now, updatedAt: now })
+    .where(eq(document.id, id));
+  await appendProvenance(db, id, { type: "document.sent", data: {} });
+
+  const rows = await db
+    .select({
+      name: signer.name,
+      email: signer.email,
+      signToken: signer.signToken,
+      orderIndex: signer.orderIndex,
+    })
+    .from(signer)
+    .where(eq(signer.documentId, id))
+    .orderBy(asc(signer.orderIndex));
+  const signers = rows.map((s) => ({
+    name: s.name,
+    email: s.email,
+    signToken: s.signToken,
+    active:
+      doc.signingMode !== "sequential" || s.orderIndex === rows[0]?.orderIndex,
+  }));
+
+  emitDocumentSent({
+    documentId: id,
+    name: doc.name,
+    ownerId: doc.ownerId,
+    signerCount: rows.length,
+    signingMode: doc.signingMode,
+  });
+
+  return { documentName: doc.name, signers };
+};
+
+/**
+ * Permanently delete a document the owner owns (or shares through a workspace),
+ * with its signers, fields, provenance, and stored PDFs. Returns true on
+ * delete, false when the owner may not delete it.
+ */
+export const deleteOwnedDocument = async (
+  db: Db,
+  id: string,
+  ownerId: string,
+  workspaceIds: string[],
+): Promise<boolean> => {
+  const access = [eq(document.ownerId, ownerId)];
+  if (workspaceIds.length > 0) {
+    access.push(inArray(document.organizationId, workspaceIds));
+  }
+  const [doc] = await db
+    .select({
+      id: document.id,
+      originalPdfKey: document.originalPdfKey,
+      signedPdfKey: document.signedPdfKey,
+    })
+    .from(document)
+    .where(and(eq(document.id, id), or(...access)));
+  if (!doc) return false;
+
+  await db.delete(signatureEvent).where(eq(signatureEvent.documentId, id));
+  await db.delete(field).where(eq(field.documentId, id));
+  await db.delete(signer).where(eq(signer.documentId, id));
+  await db.delete(document).where(eq(document.id, id));
+
+  for (const key of [doc.originalPdfKey, doc.signedPdfKey]) {
+    if (key) await deletePdf(key).catch(() => {});
+  }
+  return true;
 };
 
 export interface CreateDraftInput {
