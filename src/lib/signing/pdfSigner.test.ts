@@ -57,4 +57,20 @@ describe("signPdf", () => {
 
     expect(info.signerCommonName).toBe("Katherine Johnson");
   });
+
+  // Regression: inspection used to strip trailing zeros from the signature hex,
+  // which truncated a CMS whose final DER byte was legitimately 0x00 and threw
+  // "too few bytes to read ASN.1 value" nondeterministically. Reading the CMS by
+  // its declared ASN.1 length is stable across fresh certs/signatures.
+  test("inspects reliably across many fresh signatures", async () => {
+    for (let i = 0; i < 12; i++) {
+      const pkcs12 = generateTestPkcs12({ commonName: `Signer ${i}` });
+      const signed = await signPdf(await createSampleDocument(), pkcs12, {
+        name: `Signer ${i}`,
+      });
+      const info = inspectPdfSignature(signed);
+      expect(info.hasSignature).toBe(true);
+      expect(info.signerCommonName).toBe(`Signer ${i}`);
+    }
+  });
 });
