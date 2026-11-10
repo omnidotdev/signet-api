@@ -1,0 +1,1 @@
+ALTER TABLE "document" ADD COLUMN "organization_id" text;

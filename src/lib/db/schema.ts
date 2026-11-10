@@ -32,6 +32,8 @@ export const document = pgTable("document", {
   sentAt: timestamp("sent_at", { withTimezone: true }),
   /** Gatekeeper subject of the signed-in sender, null for anonymous sends */
   ownerId: text("owner_id"),
+  /** workspace (Gatekeeper organization) the document belongs to, null if none */
+  organizationId: text("organization_id"),
   /** denormalized sender email for dashboard display */
   ownerEmail: text("owner_email"),
   createdAt: timestamp("created_at", { withTimezone: true })

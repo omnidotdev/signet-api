@@ -58,7 +58,8 @@ export const buildAuthorizeUrl = async (
   url.searchParams.set("response_type", "code");
   url.searchParams.set("client_id", config.clientId);
   url.searchParams.set("redirect_uri", config.redirectUri);
-  url.searchParams.set("scope", "openid email profile");
+  // `organization` adds the user's workspace memberships to userinfo
+  url.searchParams.set("scope", "openid email profile organization");
   url.searchParams.set("state", params.state);
   url.searchParams.set("nonce", params.nonce);
   url.searchParams.set("code_challenge", params.challenge);
@@ -94,19 +95,55 @@ const exchangeCode = async (
   return res.json() as Promise<{ id_token?: string; access_token?: string }>;
 };
 
-/** Pull email and name from userinfo when the id_token omits them */
+/** A workspace (Gatekeeper organization) the sender belongs to */
+interface UserinfoOrg {
+  id: string;
+  type?: string;
+}
+
+/**
+ * Read the organizations claim from a userinfo body. The claim is namespaced
+ * (e.g. `https://manifold.omni.dev/@omni/claims/organizations`), so match by the
+ * key suffix rather than hardcoding the namespace.
+ */
+const readOrgs = (body: Record<string, unknown>): UserinfoOrg[] => {
+  const entry = Object.entries(body).find(([k]) =>
+    k.endsWith("/organizations"),
+  );
+  const value = entry?.[1];
+  if (!Array.isArray(value)) return [];
+  return value.filter(
+    (o): o is UserinfoOrg =>
+      typeof o === "object" &&
+      o !== null &&
+      typeof (o as UserinfoOrg).id === "string",
+  );
+};
+
+/** Pull email, name, and workspace memberships from userinfo */
 const fetchUserinfo = async (
   config: AuthConfig,
   accessToken: string,
-): Promise<{ email?: string; name?: string }> => {
+): Promise<{ email?: string; name?: string; organizations: UserinfoOrg[] }> => {
   const discovery = await discover(config.issuer);
   const res = await fetch(discovery.userinfo_endpoint, {
     headers: { authorization: `Bearer ${accessToken}` },
   });
-  if (!res.ok) return {};
-  const body = (await res.json()) as { email?: string; name?: string };
-  return { email: body.email, name: body.name };
+  if (!res.ok) return { organizations: [] };
+  const body = (await res.json()) as Record<string, unknown> & {
+    email?: string;
+    name?: string;
+  };
+  return {
+    email: body.email,
+    name: body.name,
+    organizations: readOrgs(body),
+  };
 };
+
+/** The active workspace: the sender's personal org, else the first membership */
+const activeOrg = (orgs: UserinfoOrg[]): string | undefined =>
+  (orgs.find((o) => o.type === "personal") ?? orgs[0])?.id;
 
 /**
  * Complete the callback: exchange the code, validate the id_token against the
@@ -138,11 +175,13 @@ export const completeLogin = async (
 
   let email = typeof payload.email === "string" ? payload.email : "";
   let name = typeof payload.name === "string" ? payload.name : undefined;
-  if (!email && tokens.access_token) {
+  let organizationId: string | undefined;
+  if (tokens.access_token) {
     const info = await fetchUserinfo(config, tokens.access_token);
-    email = info.email ?? "";
+    email = email || (info.email ?? "");
     name = name ?? info.name;
+    organizationId = activeOrg(info.organizations);
   }
 
-  return { sub: payload.sub, email, name };
+  return { sub: payload.sub, email, name, organizationId };
 };

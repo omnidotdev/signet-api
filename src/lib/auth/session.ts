@@ -17,6 +17,8 @@ export interface Session {
   sub: string;
   email: string;
   name?: string;
+  /** active workspace (Gatekeeper organization) id, stamped on new documents */
+  organizationId?: string;
 }
 
 /** The in-flight OIDC login carried in the transaction cookie */
@@ -33,7 +35,11 @@ export const signSession = (
   secret: string,
   expiration: string | number = "7d",
 ): Promise<string> =>
-  new SignJWT({ email: session.email, name: session.name })
+  new SignJWT({
+    email: session.email,
+    name: session.name,
+    organizationId: session.organizationId,
+  })
     .setProtectedHeader({ alg: ALG })
     .setSubject(session.sub)
     .setIssuedAt()
@@ -55,6 +61,10 @@ export const verifySession = async (
       sub: payload.sub,
       email: typeof payload.email === "string" ? payload.email : "",
       name: typeof payload.name === "string" ? payload.name : undefined,
+      organizationId:
+        typeof payload.organizationId === "string"
+          ? payload.organizationId
+          : undefined,
     };
   } catch {
     return null;
