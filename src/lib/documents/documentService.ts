@@ -479,6 +479,41 @@ const ownerAccess = (ownerId: string, workspaceIds: string[]) => {
 };
 
 /**
+ * The document file for the owner (or a workspace member) at any stage: the
+ * sealed PDF once signed, otherwise the original uploaded PDF, so a sender can
+ * always open a document from their history. Null when not theirs.
+ */
+export const getDocumentFileForOwner = async (
+  db: Db,
+  id: string,
+  ownerId: string,
+  workspaceIds: string[],
+): Promise<{ bytes: Uint8Array; signed: boolean } | null> => {
+  const [doc] = await db
+    .select({
+      originalPdf: document.originalPdf,
+      originalPdfKey: document.originalPdfKey,
+      signedPdf: document.signedPdf,
+      signedPdfKey: document.signedPdfKey,
+    })
+    .from(document)
+    .where(and(eq(document.id, id), ownerAccess(ownerId, workspaceIds)));
+  if (!doc) return null;
+
+  const hasSigned = doc.signedPdf !== null || doc.signedPdfKey !== null;
+  if (hasSigned) {
+    return {
+      bytes: await loadPdf(doc.signedPdf ?? "", doc.signedPdfKey),
+      signed: true,
+    };
+  }
+  return {
+    bytes: await loadPdf(doc.originalPdf, doc.originalPdfKey),
+    signed: false,
+  };
+};
+
+/**
  * Full status + signing history for a document the owner owns (or shares
  * through a workspace), for the sender's tracking view. Null when not theirs.
  */

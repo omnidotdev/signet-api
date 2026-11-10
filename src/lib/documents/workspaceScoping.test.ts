@@ -7,6 +7,7 @@ import {
   createMultiSignerRequest,
   createSigningRequest,
   getDocumentDetailForOwner,
+  getDocumentFileForOwner,
   getEditorDataForOwner,
   getSignedPdfForMember,
   listWorkspaceDocuments,
@@ -53,6 +54,24 @@ describe("workspace-scoped documents", () => {
     // Alice viewing ws-a sees: ws-a docs (both) + her unfiled one; never ws-b
     const docs = await listWorkspaceDocuments(db, "alice", "ws-a");
     expect(docs).toHaveLength(3);
+  });
+
+  test("the owner can open a sent document's file before it is signed", async () => {
+    const req = await createSigningRequest(db, {
+      name: "Pending",
+      pdf: await tinyPdf(),
+      signerName: "Ada",
+      ownerId: "alice",
+    });
+    const file = await getDocumentFileForOwner(db, req.id, "alice", []);
+    expect(file?.signed).toBe(false);
+    expect(file?.bytes.length ?? 0).toBeGreaterThan(0);
+    // once signed, the same call returns the sealed PDF
+    await signByToken(db, serviceSigner, req.signToken, "Ada");
+    const after = await getDocumentFileForOwner(db, req.id, "alice", []);
+    expect(after?.signed).toBe(true);
+    // a stranger gets nothing
+    expect(await getDocumentFileForOwner(db, req.id, "eve", [])).toBeNull();
   });
 
   test("the owner can see status and history, and resend a reminder", async () => {
