@@ -89,6 +89,26 @@ const extractCommonName = (cert: forge.pki.Certificate): string | undefined => {
 };
 
 /**
+ * Total byte length of the DER object at the start of a binary string (forge's
+ * byte-string form): tag + length octets + content. Returns null when the bytes
+ * do not begin a DER object (e.g. all padding) or the header is truncated.
+ */
+const derObjectLength = (bytes: string): number | null => {
+  if (bytes.length < 2) return null;
+  // a leading zero byte means padding, not an ASN.1 tag
+  if (bytes.charCodeAt(0) === 0) return null;
+  const lengthByte = bytes.charCodeAt(1);
+  if (lengthByte < 0x80) return 2 + lengthByte; // short form
+  const count = lengthByte & 0x7f; // long form: number of length octets
+  if (count === 0 || bytes.length < 2 + count) return null;
+  let length = 0;
+  for (let i = 0; i < count; i++)
+    length = length * 256 + bytes.charCodeAt(2 + i);
+  const total = 2 + count + length;
+  return bytes.length >= total ? total : null;
+};
+
+/**
  * Parse a signed PDF and return a structural summary of its first signature.
  *
  * This verifies that a real detached PKCS#7 signature is embedded over a valid
@@ -129,10 +149,17 @@ export const inspectPdfSignature = (pdf: Uint8Array): PdfSignatureInfo => {
   // the signature bytes live as hex between the two ByteRange gaps
   const contentsStart = rangeStart + sigStart + 1;
   const contentsEnd = sigEnd - 1;
-  const hex = raw.slice(contentsStart, contentsEnd).replace(/0+$/, "");
-  const normalizedHex = hex.length % 2 === 0 ? hex : hex.slice(0, -1);
+  // The Contents region is a fixed-size placeholder: the DER-encoded CMS sits at
+  // the start and the rest is zero padding. Read the CMS by its own declared
+  // ASN.1 length rather than stripping trailing zeros, which would truncate a
+  // signature whose final DER bytes are legitimately 0x00 (a nondeterministic
+  // "too few bytes to read ASN.1 value" failure)
+  let regionHex = raw.slice(contentsStart, contentsEnd);
+  if (regionHex.length % 2 === 1) regionHex = regionHex.slice(0, -1);
+  const regionBytes = forge.util.hexToBytes(regionHex);
+  const derLength = derObjectLength(regionBytes);
 
-  if (normalizedHex.length === 0) {
+  if (derLength === null) {
     return {
       byteRange,
       certificateCommonNames: [],
@@ -141,7 +168,7 @@ export const inspectPdfSignature = (pdf: Uint8Array): PdfSignatureInfo => {
     };
   }
 
-  const der = forge.util.hexToBytes(normalizedHex);
+  const der = regionBytes.slice(0, derLength);
   const asn1 = forge.asn1.fromDer(der);
   const message = forge.pkcs7.messageFromAsn1(
     asn1,
