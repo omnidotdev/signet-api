@@ -41,6 +41,7 @@ import {
   listTemplates,
   saveTemplateFromDraft,
 } from "./lib/documents/templateService.ts";
+import { sendCompletionEmail } from "./lib/email/completionEmail.ts";
 import { sendSignatureRequestEmail } from "./lib/email/signatureRequestEmail.ts";
 import { runReminders } from "./lib/reminders/reminderJob.ts";
 import { signPdf } from "./lib/signing/pdfSigner.ts";
@@ -677,6 +678,29 @@ if (hasDb) {
             documentName: result.notifySigner.documentName,
             signUrl: `${appBaseUrl}/sign/${result.notifySigner.signToken}`,
           });
+        }
+        // on completion, tell every party the document is signed, each with a
+        // link to view and download the finished document
+        if (result.completion) {
+          const { documentName, ownerEmail, signers } = result.completion;
+          for (const s of signers) {
+            if (!s.email) continue;
+            void sendCompletionEmail({
+              to: s.email,
+              recipientName: s.name,
+              documentName,
+              downloadUrl: `${appBaseUrl}/sign/${s.signToken}`,
+            });
+          }
+          // the sender, when they are not themselves a signer we already emailed
+          if (ownerEmail && !signers.some((s) => s.email === ownerEmail)) {
+            void sendCompletionEmail({
+              to: ownerEmail,
+              recipientName: "there",
+              documentName,
+              downloadUrl: `${appBaseUrl}/documents`,
+            });
+          }
         }
         return { ok: true, completed: result.completed };
       },

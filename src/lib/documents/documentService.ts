@@ -1122,6 +1122,12 @@ export interface SignResult {
     signToken: string;
     documentName: string;
   };
+  /** present when this signature completed the document: who to notify */
+  completion?: {
+    documentName: string;
+    ownerEmail: string | null;
+    signers: { name: string; email: string | null; signToken: string }[];
+  };
   error?: string;
 }
 
@@ -1310,7 +1316,20 @@ export const signByToken = async (
     }
   }
 
-  return { ok: true, documentId: doc.id, completed, notifySigner };
+  // on completion, hand back who to tell the document is finished
+  const completion: SignResult["completion"] = completed
+    ? {
+        documentName: doc.name,
+        ownerEmail: doc.ownerEmail,
+        signers: signers.map((s) => ({
+          name: s.name,
+          email: s.email,
+          signToken: s.signToken,
+        })),
+      }
+    : undefined;
+
+  return { ok: true, documentId: doc.id, completed, notifySigner, completion };
 };
 
 export interface DocumentStatus {
