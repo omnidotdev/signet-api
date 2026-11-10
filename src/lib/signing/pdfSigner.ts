@@ -4,6 +4,12 @@ import { SignPdf } from "@signpdf/signpdf";
 import forge from "node-forge";
 import { PDFDocument } from "pdf-lib";
 
+import { embedSignatureTimestamp } from "./padesTimestamp.ts";
+
+// Reserve enough signature space for the CMS plus an embedded RFC 3161
+// timestamp token (PAdES-T), which the signing step adds afterwards
+const SIGNATURE_LENGTH = 16384;
+
 /**
  * Options describing the signature placeholder embedded into a PDF before the
  * detached PKCS#7 (CMS) signature is applied. These values become part of the
@@ -53,6 +59,7 @@ export const signPdf = async (
     contactInfo: opts.contactInfo,
     name: opts.name,
     location: opts.location,
+    signatureLength: SIGNATURE_LENGTH,
   });
 
   // object streams must stay disabled so the ByteRange stays contiguous and the
@@ -65,7 +72,9 @@ export const signPdf = async (
 
   const signed = await new SignPdf().sign(Buffer.from(withPlaceholder), signer);
 
-  return new Uint8Array(signed);
+  // add a signature timestamp (PAdES-T) inside the CMS; best-effort, so an
+  // unavailable TSA returns the signed PDF unchanged
+  return embedSignatureTimestamp(new Uint8Array(signed));
 };
 
 /** Structural summary of a signature extracted from a signed PDF */

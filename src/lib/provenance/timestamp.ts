@@ -157,6 +157,49 @@ export const parseTimestampResponse = (
 };
 
 /**
+ * Fetch the raw RFC 3161 TimeStampToken (a CMS ContentInfo, DER as a forge
+ * byte-string) over the given bytes, for embedding inside a PDF signature's CMS
+ * as a signature timestamp (PAdES-T). Returns null when no TSA is configured or
+ * the request fails (best-effort). A modern TSA returns a SHA-256 token whose
+ * signing-certificate reference is ESSCertIDv2 (RFC 5816).
+ */
+export const requestTimestampTokenDer = async (
+  bytes: Uint8Array,
+): Promise<string | null> => {
+  const tsa = process.env.SIGNET_TSA_URL;
+  if (!tsa) return null;
+  const hashHex = createHash("sha256").update(bytes).digest("hex");
+  try {
+    const reqDer = buildTimestampRequest(hashHex);
+    const res = await fetch(tsa, {
+      method: "POST",
+      headers: { "content-type": "application/timestamp-query" },
+      body: Uint8Array.from(reqDer, (c) => c.charCodeAt(0)),
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!res.ok) return null;
+    const respDer = Buffer.from(await res.arrayBuffer()).toString("latin1");
+    const resp = forge.asn1.fromDer(respDer);
+    if (!Array.isArray(resp.value) || resp.value.length < 2) return null;
+    const statusInfo = resp.value[0] as forge.asn1.Asn1;
+    const statusInt =
+      Array.isArray(statusInfo.value) && statusInfo.value[0]
+        ? (statusInfo.value[0] as forge.asn1.Asn1)
+        : null;
+    const status =
+      statusInt && typeof statusInt.value === "string"
+        ? statusInt.value.charCodeAt(0)
+        : -1;
+    if (status !== 0 && status !== 1) return null;
+    const token = resp.value[1] as forge.asn1.Asn1;
+    return forge.asn1.toDer(token).getBytes();
+  } catch (err) {
+    console.warn("[signet] timestamp token request failed", err);
+    return null;
+  }
+};
+
+/**
  * Request a trusted timestamp over the given bytes from the configured TSA.
  * Returns null when no TSA is configured or the request fails (best-effort).
  */
