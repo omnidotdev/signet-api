@@ -19,6 +19,7 @@ import {
   addSignerToDraft,
   createDraft,
   createMultiSignerRequest,
+  deleteOwnedDocument,
   getEditorData,
   getSignedPdf,
   getSignedPdfForMember,
@@ -29,6 +30,7 @@ import {
   removeSignerFromDraft,
   saveFields,
   sendDraft,
+  sendOwnedDraft,
   signByToken,
   updateDraftSigner,
   voidDocument,
@@ -322,33 +324,41 @@ if (hasDb) {
         }
 
         const sequential = body.signingMode === "sequential";
+        // save without sending when the caller asks to (a draft); drafts are
+        // owner-only, so ignore the flag for an anonymous sender
+        const draft = body.draft === "true" && Boolean(session?.sub);
         const req = await createMultiSignerRequest(db, {
           name: documentName,
           pdf,
           signers: parsedSigners,
           signingMode: sequential ? "sequential" : "parallel",
+          draft,
           ownerId: session?.sub,
           organizationId: session?.organizationId,
           ownerEmail: session?.email,
         });
 
-        // email each signer their link; in sequential mode only the first is
-        // notified now, the rest as each predecessor finishes (see signByToken)
-        const toNotify = sequential ? req.signers.slice(0, 1) : req.signers;
-        for (const s of toNotify) {
-          if (!s.email) continue;
-          await sendSignatureRequestEmail({
-            to: s.email,
-            signerName: s.name,
-            documentName,
-            signUrl: `${appBaseUrl}/sign/${s.signToken}`,
-          });
+        // email each signer their link unless this is a draft; in sequential
+        // mode only the first is notified now, the rest as each predecessor
+        // finishes (see signByToken)
+        if (!draft) {
+          const toNotify = sequential ? req.signers.slice(0, 1) : req.signers;
+          for (const s of toNotify) {
+            if (!s.email) continue;
+            await sendSignatureRequestEmail({
+              to: s.email,
+              signerName: s.name,
+              documentName,
+              signUrl: `${appBaseUrl}/sign/${s.signToken}`,
+            });
+          }
         }
 
         const first = req.signers[0];
         set.status = 201;
         return {
           id: req.id,
+          draft,
           // the first signer's link, for the "share this link" affordance
           signUrl: first ? `${appBaseUrl}/sign/${first.signToken}` : undefined,
           signers: req.signers.map((s) => ({
@@ -368,9 +378,63 @@ if (hasDb) {
           // preferred: a JSON array of { name, email? }
           signers: t.Optional(t.String()),
           signingMode: t.Optional(t.String()),
+          // "true" to save as an unsent draft instead of sending now
+          draft: t.Optional(t.String()),
         }),
       },
     )
+    // send a draft the signed-in owner owns, returning each signer's link
+    .post("/api/documents/:id/send", async ({ params, session, set }) => {
+      if (!session) {
+        set.status = 401;
+        return { ok: false };
+      }
+      const result = await sendOwnedDraft(
+        db,
+        params.id,
+        session.sub,
+        (session.workspaces ?? []).map((w) => w.id),
+      );
+      if (!result) {
+        set.status = 404;
+        return { ok: false };
+      }
+      for (const s of result.signers) {
+        if (s.active && s.email) {
+          await sendSignatureRequestEmail({
+            to: s.email,
+            signerName: s.name,
+            documentName: result.documentName,
+            signUrl: `${appBaseUrl}/sign/${s.signToken}`,
+          });
+        }
+      }
+      return {
+        ok: true,
+        signers: result.signers.map((s) => ({
+          name: s.name,
+          signUrl: `${appBaseUrl}/sign/${s.signToken}`,
+        })),
+      };
+    })
+    // delete a document the signed-in owner owns (draft or sent)
+    .delete("/api/documents/:id", async ({ params, session, set }) => {
+      if (!session) {
+        set.status = 401;
+        return { ok: false };
+      }
+      const ok = await deleteOwnedDocument(
+        db,
+        params.id,
+        session.sub,
+        (session.workspaces ?? []).map((w) => w.id),
+      );
+      if (!ok) {
+        set.status = 404;
+        return { ok: false };
+      }
+      return { ok: true };
+    })
     // create a draft for the field-placement editor (one or more signers)
     .post(
       "/api/drafts",
