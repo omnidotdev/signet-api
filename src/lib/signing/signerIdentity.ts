@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import forge from "node-forge";
 
 export interface SelfSignedOptions {
@@ -58,17 +59,34 @@ export interface ServiceSigner {
 }
 
 /**
- * Load the service signing identity from the environment, or generate an
- * ephemeral development identity when none is configured.
+ * Load the service signing identity, or generate an ephemeral development
+ * identity when none is configured. Sources, in order of precedence:
  *
- * Set SIGNET_SIGNER_P12_BASE64 (base64-encoded PKCS#12 DER) and optionally
- * SIGNET_SIGNER_PASSPHRASE to provide a real identity. When unset the service
- * still boots with a warning and signs with an ephemeral self-signed identity
+ *  1. SIGNET_SIGNER_P12_FILE  - path to a PKCS#12 file (cert-manager mounts the
+ *     Omni-CA-issued keystore here; the chain travels in the signature so
+ *     verifiers that trust the Omni root validate it). The passphrase comes
+ *     from SIGNET_SIGNER_PASSPHRASE_FILE or SIGNET_SIGNER_PASSPHRASE.
+ *  2. SIGNET_SIGNER_P12_BASE64 - base64-encoded PKCS#12 DER, with
+ *     SIGNET_SIGNER_PASSPHRASE.
+ *  3. none - boots with a warning and an ephemeral self-signed identity.
  */
 export const loadServiceSigner = (): ServiceSigner => {
+  const file = process.env.SIGNET_SIGNER_P12_FILE;
   const base64 = process.env.SIGNET_SIGNER_P12_BASE64;
-  const passphrase = process.env.SIGNET_SIGNER_PASSPHRASE ?? "";
+  const passphraseFile = process.env.SIGNET_SIGNER_PASSPHRASE_FILE;
+  const passphrase = passphraseFile
+    ? readFileSync(passphraseFile, "utf8").trim()
+    : (process.env.SIGNET_SIGNER_PASSPHRASE ?? "");
   const commonName = process.env.SIGNET_SIGNER_NAME ?? "Signet Signer";
+
+  if (file) {
+    return {
+      pkcs12: new Uint8Array(readFileSync(file)),
+      passphrase,
+      commonName,
+      ephemeral: false,
+    };
+  }
 
   if (base64) {
     return {
@@ -80,7 +98,7 @@ export const loadServiceSigner = (): ServiceSigner => {
   }
 
   console.warn(
-    "SIGNET_SIGNER_P12_BASE64 not set, signing with an ephemeral self-signed identity",
+    "No SIGNET_SIGNER_P12_FILE/BASE64 set, signing with an ephemeral self-signed identity",
   );
   return {
     pkcs12: generateSelfSignedPkcs12({ commonName, passphrase }),
