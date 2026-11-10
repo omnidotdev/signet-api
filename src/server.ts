@@ -18,7 +18,7 @@ import { getDb, runMigrations } from "./lib/db/client.ts";
 import {
   addSignerToDraft,
   createDraft,
-  createSigningRequest,
+  createMultiSignerRequest,
   getEditorData,
   getSignedPdf,
   getSignedPdfForMember,
@@ -292,28 +292,69 @@ if (hasDb) {
       async ({ body, session, set }) => {
         const pdf = new Uint8Array(await body.file.arrayBuffer());
         const documentName = body.name || body.file.name || "Document";
-        const req = await createSigningRequest(db, {
+
+        // Multi-signer send: a JSON `signers` array ([{name,email?}]) takes
+        // precedence. Each party is auto-assigned their own signing line and
+        // emailed their link (sequential sends email only the first signer now)
+        let parsedSigners: { name: string; email?: string }[] = [];
+        if (body.signers) {
+          try {
+            parsedSigners = (
+              JSON.parse(body.signers) as { name?: string; email?: string }[]
+            )
+              .map((s) => ({
+                name: (s.name ?? "").trim(),
+                email: s.email?.trim() || undefined,
+              }))
+              .filter((s) => s.name);
+          } catch {
+            parsedSigners = [];
+          }
+        }
+        if (parsedSigners.length === 0 && body.signerName) {
+          parsedSigners = [
+            { name: body.signerName, email: body.signerEmail || undefined },
+          ];
+        }
+        if (parsedSigners.length === 0) {
+          set.status = 400;
+          return { error: "no_signers" };
+        }
+
+        const sequential = body.signingMode === "sequential";
+        const req = await createMultiSignerRequest(db, {
           name: documentName,
           pdf,
-          signerName: body.signerName,
-          signerEmail: body.signerEmail,
+          signers: parsedSigners,
+          signingMode: sequential ? "sequential" : "parallel",
           ownerId: session?.sub,
           organizationId: session?.organizationId,
           ownerEmail: session?.email,
         });
-        const signUrl = `${appBaseUrl}/sign/${req.signToken}`;
-        if (body.signerEmail) {
+
+        // email each signer their link; in sequential mode only the first is
+        // notified now, the rest as each predecessor finishes (see signByToken)
+        const toNotify = sequential ? req.signers.slice(0, 1) : req.signers;
+        for (const s of toNotify) {
+          if (!s.email) continue;
           await sendSignatureRequestEmail({
-            to: body.signerEmail,
-            signerName: body.signerName,
+            to: s.email,
+            signerName: s.name,
             documentName,
-            signUrl,
+            signUrl: `${appBaseUrl}/sign/${s.signToken}`,
           });
         }
+
+        const first = req.signers[0];
         set.status = 201;
         return {
           id: req.id,
-          signUrl,
+          // the first signer's link, for the "share this link" affordance
+          signUrl: first ? `${appBaseUrl}/sign/${first.signToken}` : undefined,
+          signers: req.signers.map((s) => ({
+            name: s.name,
+            signUrl: `${appBaseUrl}/sign/${s.signToken}`,
+          })),
           manageUrl: `${baseUrl}/d/${req.id}?token=${req.manageToken}`,
         };
       },
@@ -321,8 +362,12 @@ if (hasDb) {
         body: t.Object({
           file: t.File({ type: "application/pdf" }),
           name: t.Optional(t.String()),
-          signerName: t.String(),
+          // legacy single-signer fields (kept for back-compat)
+          signerName: t.Optional(t.String()),
           signerEmail: t.Optional(t.String()),
+          // preferred: a JSON array of { name, email? }
+          signers: t.Optional(t.String()),
+          signingMode: t.Optional(t.String()),
         }),
       },
     )
