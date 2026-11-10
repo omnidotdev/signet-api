@@ -16,6 +16,7 @@
     "knip": "knip-bun",
     "db:generate": "drizzle-kit generate --config drizzle.config.ts",
     "demo": "bun run src/scripts/signDemo.ts",
+    "signing:ca": "bun run src/scripts/generateSigningCa.ts",
     "prepare": "husky || true"
   },
   "dependencies": {
