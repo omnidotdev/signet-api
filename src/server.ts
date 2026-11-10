@@ -20,6 +20,7 @@ import {
   createDraft,
   createMultiSignerRequest,
   deleteOwnedDocument,
+  getDocumentDetailForOwner,
   getEditorData,
   getSignedPdf,
   getSignedPdfForMember,
@@ -27,6 +28,7 @@ import {
   getSignerFillData,
   getStatus,
   listWorkspaceDocuments,
+  remindOwnedDocument,
   removeSignerFromDraft,
   renameOwnedDocument,
   saveFields,
@@ -418,6 +420,50 @@ if (hasDb) {
           signUrl: `${appBaseUrl}/sign/${s.signToken}`,
         })),
       };
+    })
+    // full status + history for a document the signed-in owner owns
+    .get("/api/documents/:id", async ({ params, session, set }) => {
+      if (!session) {
+        set.status = 401;
+        return { error: "unauthorized" };
+      }
+      const detail = await getDocumentDetailForOwner(
+        db,
+        params.id,
+        session.sub,
+        (session.workspaces ?? []).map((w) => w.id),
+      );
+      if (!detail) {
+        set.status = 404;
+        return { error: "not_found" };
+      }
+      return detail;
+    })
+    // resend the signing reminder to pending signers (owner-scoped)
+    .post("/api/documents/:id/remind", async ({ params, session, set }) => {
+      if (!session) {
+        set.status = 401;
+        return { ok: false };
+      }
+      const result = await remindOwnedDocument(
+        db,
+        params.id,
+        session.sub,
+        (session.workspaces ?? []).map((w) => w.id),
+      );
+      if (!result) {
+        set.status = 404;
+        return { ok: false };
+      }
+      for (const s of result.signers) {
+        void sendSignatureRequestEmail({
+          to: s.email,
+          signerName: s.name,
+          documentName: result.documentName,
+          signUrl: `${appBaseUrl}/sign/${s.signToken}`,
+        });
+      }
+      return { ok: true, reminded: result.signers.length };
     })
     // rename a document the signed-in owner owns
     .patch(
