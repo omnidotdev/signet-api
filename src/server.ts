@@ -7,6 +7,7 @@ import {
   createPkce,
   randomToken,
 } from "./lib/auth/oidc.ts";
+import type { Session } from "./lib/auth/session.ts";
 import {
   signSession,
   signTransaction,
@@ -102,9 +103,29 @@ const pdfResponse = (bytes: Uint8Array, filename: string) =>
     },
   });
 
+const SERVICE_KEY = process.env.SIGNET_SERVICE_KEY;
+
 const app = new Elysia()
-  // Resolve the signed-in sender from the session cookie for every request
-  .derive(async ({ cookie }) => {
+  // Resolve the signed-in sender. The signet-app front end proxies signed-in
+  // requests server-to-server with no cookie, passing the user's identity in
+  // headers authenticated by a shared service key; everything else reads the
+  // session cookie as before
+  .derive(async ({ cookie, headers }) => {
+    const ownerId = headers["x-signet-owner-id"];
+    if (
+      SERVICE_KEY &&
+      headers["x-signet-service-key"] === SERVICE_KEY &&
+      ownerId
+    ) {
+      const organizationId = headers["x-signet-organization-id"] || undefined;
+      const session: Session = {
+        sub: ownerId,
+        email: headers["x-signet-owner-email"] ?? "",
+        organizationId,
+        workspaces: organizationId ? [{ id: organizationId }] : undefined,
+      };
+      return { session };
+    }
     const raw = cookie[SESSION_COOKIE]?.value;
     const token = typeof raw === "string" ? raw : undefined;
     return {
@@ -247,6 +268,20 @@ if (hasDb) {
   }
 
   app
+    // the signed-in sender's documents (scoped to their active workspace), so
+    // the app can show a "Your documents" list instead of stranding uploads
+    .get("/api/documents", async ({ session, set }) => {
+      if (!session) {
+        set.status = 401;
+        return { documents: [] };
+      }
+      const documents = await listWorkspaceDocuments(
+        db,
+        session.sub,
+        session.organizationId,
+      );
+      return { documents };
+    })
     // create a signing request, returns shareable links
     .post(
       "/api/documents",
