@@ -4,6 +4,7 @@ import type { Db } from "../db/client.ts";
 import type { ServiceSigner } from "../signing/signerIdentity.ts";
 import { generateSelfSignedPkcs12 } from "../signing/signerIdentity.ts";
 import {
+  createMultiSignerRequest,
   createSigningRequest,
   getSignedPdfForMember,
   listWorkspaceDocuments,
@@ -48,6 +49,19 @@ describe("workspace-scoped documents", () => {
     // Alice viewing ws-a sees: ws-a docs (both) + her unfiled one; never ws-b
     const docs = await listWorkspaceDocuments(db, "alice", "ws-a");
     expect(docs).toHaveLength(3);
+  });
+
+  test("a multi-signer document appears once, with its signer count", async () => {
+    await createMultiSignerRequest(db, {
+      name: "Operating Agreement",
+      pdf: await tinyPdf(),
+      signers: [{ name: "Ada" }, { name: "Grace" }, { name: "Linus" }],
+      ownerId: "alice",
+    });
+    const docs = await listWorkspaceDocuments(db, "alice", undefined);
+    expect(docs).toHaveLength(1);
+    expect(docs[0]?.signerCount).toBe(3);
+    expect(docs[0]?.signerName).toBe("Ada");
   });
 
   test("a workspace member can download; a non-member cannot", async () => {

@@ -29,7 +29,6 @@ interface TextItem {
 const SIGNATURE = /sign(?:ature|ed\s+by|\s+here)?\b/i;
 const INITIALS = /\binitials?\b/i;
 const DATE = /\bdate(?:d|\s+signed)?\b/i;
-const UNDERSCORES = /_{3,}/;
 
 /** Classify a text run into a field type, or null when it is not an anchor */
 const classify = (str: string): FieldType | null => {
@@ -64,35 +63,39 @@ const labelToLeft = (blank: TextItem, items: TextItem[]): FieldType | null => {
   return best;
 };
 
-/**
- * Place a field for an anchor item. When the run carries a blank line
- * (underscores), the field overlays it; otherwise it sits just to the right of
- * the label, where a signer would write.
- */
-const place = (
-  type: FieldType,
-  item: TextItem,
-  page: number,
-): DetectedField => {
-  const x = item.transform[4] ?? 0;
-  const y = item.transform[5] ?? 0;
-  const height = Math.max(item.height || 12, 12);
-  const charW = item.str.length > 0 ? item.width / item.str.length : 6;
-
-  const underscoreAt = item.str.search(UNDERSCORES);
-  if (underscoreAt >= 0) {
-    const run = item.str.slice(underscoreAt).match(UNDERSCORES)?.[0] ?? "";
-    return {
-      type,
-      page,
-      x: x + underscoreAt * charW,
-      y,
-      width: Math.max(run.length * charW, 80),
-      height,
-    };
+/** Index of the last match of a pattern in a string, or -1 */
+const lastMatchIndex = (re: RegExp, str: string): number => {
+  const g = new RegExp(
+    re.source,
+    re.flags.includes("g") ? re.flags : `${re.flags}g`,
+  );
+  let idx = -1;
+  let m: RegExpExecArray | null = g.exec(str);
+  while (m !== null) {
+    idx = m.index;
+    if (m.index === g.lastIndex) g.lastIndex++;
+    m = g.exec(str);
   }
-  return { type, page, x: x + item.width + 6, y, width: 180, height };
+  return idx;
 };
+
+/**
+ * Classify a blank by the anchor label immediately before it within the same
+ * text run, so a line like "______ Date: ______" yields a signature then a
+ * date. Returns the type of the nearest (last) label before the blank, or null.
+ */
+const classifyBefore = (before: string): FieldType | null => {
+  const i = lastMatchIndex(INITIALS, before);
+  const s = lastMatchIndex(SIGNATURE, before);
+  const d = lastMatchIndex(DATE, before);
+  const max = Math.max(i, s, d);
+  if (max < 0) return null;
+  if (max === i) return "initials";
+  if (max === s) return "signature";
+  return "date";
+};
+
+const ALL_UNDERSCORES = /_{3,}/g;
 
 /** Extract text items with positions for every page */
 const extractItems = async (
@@ -149,23 +152,37 @@ export const detectFields = async (
     const fields: DetectedField[] = [];
     for (const { page, items } of pages) {
       for (const item of items) {
-        // A real field is a blank to fill (an underscore line), not a prose
+        // A real field is a blank to fill (an underscore run), not a prose
         // mention of "sign"/"date"/"initials". Requiring a blank is what keeps a
-        // legal document from sprouting a field next to every such word. Classify
-        // the blank by an anchor in its own run, else by the nearest anchor
-        // label to its left on the same line ("Signature:" then "______")
-        const blank = item.str.match(UNDERSCORES)?.[0];
-        if (!blank) continue;
-        // A long underscore run is a signing line: sign on the line itself. A
-        // trailing label ("____ Date") names a separate field, not the blank, so
-        // it must not re-type the signing line. Short blanks are typed by their
-        // own anchor, else by the nearest label to the left
-        const type =
-          blank.length >= 18
-            ? "signature"
-            : (classify(item.str) ?? labelToLeft(item, items));
-        if (!type) continue;
-        fields.push(place(type, item, page));
+        // legal document from sprouting a field next to every such word. A single
+        // run can carry several blanks ("______ Date: ______"), so place a field
+        // for EACH blank, classified by the label just before it
+        const str = item.str;
+        const x = item.transform[4] ?? 0;
+        const y = item.transform[5] ?? 0;
+        const height = Math.max(item.height || 12, 12);
+        const charW = str.length > 0 ? item.width / str.length : 6;
+
+        for (const run of str.matchAll(ALL_UNDERSCORES)) {
+          const idx = run.index ?? 0;
+          const blank = run[0];
+          const before = str.slice(0, idx);
+          // label within this run (nearest), else: a long run is a signing line
+          // (signature), else classify by a label in an earlier run/item to the
+          // left on the same line ("Signature:" then "______")
+          const type =
+            classifyBefore(before) ??
+            (blank.length >= 18 ? "signature" : labelToLeft(item, items));
+          if (!type) continue;
+          fields.push({
+            type,
+            page,
+            x: x + idx * charW,
+            y,
+            width: Math.max(blank.length * charW, 80),
+            height,
+          });
+        }
       }
     }
     return fields;

@@ -67,6 +67,26 @@ describe("field detection", () => {
     expect(await detectFields(await doc.save())).toHaveLength(0);
   });
 
+  test("detects both blanks in a signature-and-date line in one run", async () => {
+    const doc = await PDFDocument.create();
+    const page = doc.addPage([612, 792]);
+    const font = await doc.embedFont(StandardFonts.Helvetica);
+    // the common member-signature block shape: one run, two blanks
+    page.drawText(
+      "________________________________________ Date: ______________",
+      { x: 72, y: 200, size: 12, font },
+    );
+    const fields = await detectFields(await doc.save());
+    const signature = fields.find((f) => f.type === "signature");
+    const date = fields.find((f) => f.type === "date");
+    expect(signature).toBeDefined();
+    expect(date).toBeDefined();
+    // the date field sits to the right of the signature line
+    expect((date as DetectedField).x).toBeGreaterThan(
+      (signature as DetectedField).x,
+    );
+  });
+
   test("treats a long underscore signing line as a signature, not the trailing label", async () => {
     const doc = await PDFDocument.create();
     const page = doc.addPage([612, 792]);
