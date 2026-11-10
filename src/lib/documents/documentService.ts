@@ -425,6 +425,7 @@ export const saveFields = async (
 };
 
 export interface SendResult {
+  documentName: string;
   signers: {
     name: string;
     email: string | null;
@@ -485,7 +486,152 @@ export const sendDraft = async (
     signingMode: doc.signingMode,
   });
 
-  return { signers };
+  return { documentName: doc.name, signers };
+};
+
+/**
+ * Load a document by id + manage token only when it is still a draft. Signers
+ * can be changed only before sending; once sent, the signer set is locked so a
+ * signature in progress can never be invalidated by a roster change.
+ */
+const loadDraftForManage = async (
+  db: Db,
+  id: string,
+  manageToken: string,
+): Promise<{ id: string; status: string } | null> => {
+  const [doc] = await db
+    .select({ id: document.id, status: document.status })
+    .from(document)
+    .where(and(eq(document.id, id), eq(document.manageToken, manageToken)));
+  if (!doc || doc.status !== "draft") return null;
+  return doc;
+};
+
+export interface AddedSigner {
+  id: string;
+  name: string;
+  email: string | null;
+  color: string;
+  signToken: string;
+}
+
+/** Add a signer to a draft (draft only). Returns the new signer, or null */
+export const addSignerToDraft = async (
+  db: Db,
+  id: string,
+  manageToken: string,
+  input: DraftSignerInput,
+): Promise<AddedSigner | null> => {
+  const doc = await loadDraftForManage(db, id, manageToken);
+  if (!doc) return null;
+  const name = input.name?.trim();
+  if (!name) return null;
+
+  const existing = await db
+    .select({ orderIndex: signer.orderIndex })
+    .from(signer)
+    .where(eq(signer.documentId, id));
+  const nextOrder =
+    existing.reduce((max, s) => Math.max(max, s.orderIndex), -1) + 1;
+
+  const [row] = await db
+    .insert(signer)
+    .values({
+      documentId: id,
+      name,
+      email: input.email?.trim() || null,
+      signToken: generateToken(),
+      status: "pending",
+      orderIndex: nextOrder,
+      color: SIGNER_COLORS[nextOrder % SIGNER_COLORS.length] ?? null,
+    })
+    .returning({
+      id: signer.id,
+      name: signer.name,
+      email: signer.email,
+      color: signer.color,
+      signToken: signer.signToken,
+    });
+  if (!row) throw new Error("failed to add signer");
+  await appendProvenance(db, id, {
+    type: "signer.added",
+    data: { signer: name },
+  });
+  return { ...row, color: row.color ?? "" };
+};
+
+/**
+ * Remove a signer from a draft (draft only). Deletes the signer's fields (they
+ * belonged to that person) and re-normalizes the remaining order. Refuses to
+ * remove the last signer. Returns false when not a draft, unknown signer, or it
+ * would leave zero signers.
+ */
+export const removeSignerFromDraft = async (
+  db: Db,
+  id: string,
+  manageToken: string,
+  signerId: string,
+): Promise<boolean> => {
+  const doc = await loadDraftForManage(db, id, manageToken);
+  if (!doc) return false;
+
+  const roster = await db
+    .select({ id: signer.id, name: signer.name, orderIndex: signer.orderIndex })
+    .from(signer)
+    .where(eq(signer.documentId, id))
+    .orderBy(asc(signer.orderIndex));
+  const target = roster.find((s) => s.id === signerId);
+  if (!target) return false;
+  if (roster.length <= 1) return false; // a document needs at least one signer
+
+  // the removed signer's fields are theirs, so they go with them
+  await db
+    .delete(field)
+    .where(and(eq(field.documentId, id), eq(field.signerId, signerId)));
+  await db.delete(signer).where(eq(signer.id, signerId));
+
+  // re-number the remaining signers so order stays 0..n-1 (sequential routing)
+  const remaining = roster.filter((s) => s.id !== signerId);
+  for (let i = 0; i < remaining.length; i++) {
+    const s = remaining[i];
+    if (s && s.orderIndex !== i) {
+      await db.update(signer).set({ orderIndex: i }).where(eq(signer.id, s.id));
+    }
+  }
+  await appendProvenance(db, id, {
+    type: "signer.removed",
+    data: { signer: target.name },
+  });
+  return true;
+};
+
+/** Update a draft signer's name/email (draft only). Returns false if not found */
+export const updateDraftSigner = async (
+  db: Db,
+  id: string,
+  manageToken: string,
+  signerId: string,
+  input: { name?: string; email?: string | null },
+): Promise<boolean> => {
+  const doc = await loadDraftForManage(db, id, manageToken);
+  if (!doc) return false;
+  const [existing] = await db
+    .select({ id: signer.id })
+    .from(signer)
+    .where(and(eq(signer.id, signerId), eq(signer.documentId, id)));
+  if (!existing) return false;
+
+  const patch: { name?: string; email?: string | null } = {};
+  if (input.name !== undefined) {
+    const name = input.name.trim();
+    if (!name) return false;
+    patch.name = name;
+  }
+  if (input.email !== undefined) patch.email = input.email?.trim() || null;
+  if (Object.keys(patch).length > 0) {
+    await db.update(signer).set(patch).where(eq(signer.id, signerId));
+  }
+  return true;
 };
 
 export interface SignerView {

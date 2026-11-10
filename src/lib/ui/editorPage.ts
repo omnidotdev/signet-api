@@ -18,6 +18,16 @@ export const editorPage = (data: EditorData, manageToken: string): string => {
 <h1>Prepare "${escapeHtml(data.name)}"</h1>
 <p class="sub">Add fields and drag them where each signer should sign. Pick a signer, then click a field type to drop it on the page.</p>
 
+<div id="signers-panel" class="card">
+  <h2>Signers</h2>
+  <div id="signers-list"></div>
+  <form id="add-signer" class="add-signer">
+    <input type="text" id="as-name" placeholder="Name" required />
+    <input type="email" id="as-email" placeholder="Email (optional)" />
+    <button type="submit">Add signer</button>
+  </form>
+</div>
+
 <div class="toolbar">
   <label for="signer-pick">Signer</label>
   <select id="signer-pick"></select>
@@ -50,6 +60,16 @@ export const editorPage = (data: EditorData, manageToken: string): string => {
   .fld .rsz { position: absolute; right: -5px; bottom: -5px; width: 12px; height: 12px; background: #fff; border: 1.5px solid currentColor; border-radius: 2px; cursor: nwse-resize; }
   #sent-panel { margin-top: 16px; }
   #sent-panel .share { margin-top: 6px; }
+  #signers-panel { margin: 12px 0; }
+  #signers-panel h2 { margin: 0 0 8px; font-size: 1rem; }
+  .signer-line { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--border-subtle); }
+  .signer-line:last-of-type { border-bottom: 0; }
+  .signer-line .dot { width: 12px; height: 12px; border-radius: 3px; flex: 0 0 auto; }
+  .signer-line .who { flex: 1 1 auto; font-size: 0.875rem; }
+  .signer-line .who .em { color: var(--fg-muted); }
+  .signer-line .rm { border: 0; background: none; color: #b03a4a; cursor: pointer; font-size: 0.8125rem; }
+  .add-signer { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
+  .add-signer input { padding: 8px 10px; border: 1px solid var(--border-muted); border-radius: var(--radius-lg); background: var(--bg-default); color: var(--fg-default); font: inherit; }
 </style>
 
 <script type="application/json" id="editor-data">${payload}</script>
@@ -202,6 +222,35 @@ document.getElementById("send-btn").addEventListener("click", async () => {
   statusEl.textContent = "";
   panel.scrollIntoView({ behavior: "smooth" });
 });
+
+// signer management (draft only): add / remove, then reload to refresh fields
+const esc = (s) => { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; };
+function renderSigners() {
+  const list = document.getElementById("signers-list");
+  list.innerHTML = DATA.signers.map((s) =>
+    '<div class="signer-line"><span class="dot" style="background:' + (s.color || "#be6221") + '"></span>' +
+    '<span class="who">' + esc(s.name) + (s.email ? ' <span class="em">&lt;' + esc(s.email) + '&gt;</span>' : '') + '</span>' +
+    (DATA.signers.length > 1 ? '<button type="button" class="rm" data-id="' + s.id + '">Remove</button>' : '') +
+    '</div>').join("");
+  for (const btn of list.querySelectorAll(".rm")) {
+    btn.addEventListener("click", async () => {
+      btn.disabled = true;
+      const res = await fetch("/d/" + DATA.id + "/signers/" + btn.dataset.id + "?token=" + encodeURIComponent(DATA.manageToken), { method: "DELETE" });
+      if (res.ok) location.reload(); else { btn.disabled = false; statusEl.textContent = "Could not remove signer."; }
+    });
+  }
+}
+document.getElementById("add-signer").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const name = document.getElementById("as-name").value.trim();
+  if (!name) return;
+  const fd = new FormData();
+  fd.set("name", name);
+  fd.set("email", document.getElementById("as-email").value.trim());
+  const res = await fetch("/d/" + DATA.id + "/signers?token=" + encodeURIComponent(DATA.manageToken), { method: "POST", body: fd });
+  if (res.ok) location.reload(); else statusEl.textContent = "Could not add signer.";
+});
+renderSigners();
 
 render().catch((e) => { statusEl.textContent = "Could not render the document."; console.error(e); });
 </script>`,

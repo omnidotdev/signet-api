@@ -15,6 +15,7 @@ import {
 } from "./lib/auth/session.ts";
 import { getDb, runMigrations } from "./lib/db/client.ts";
 import {
+  addSignerToDraft,
   createDraft,
   createSigningRequest,
   getEditorData,
@@ -24,9 +25,11 @@ import {
   getSignerFillData,
   getStatus,
   listDocumentsByOwner,
+  removeSignerFromDraft,
   saveFields,
   sendDraft,
   signByToken,
+  updateDraftSigner,
   voidDocument,
 } from "./lib/documents/documentService.ts";
 import {
@@ -386,13 +389,67 @@ if (hasDb) {
           void sendSignatureRequestEmail({
             to: s.email,
             signerName: s.name,
-            documentName: "a document",
+            documentName: result.documentName,
             signUrl,
           });
         }
         return { name: s.name, signUrl, active: s.active };
       });
       return { ok: true, signers };
+    })
+    // add a signer to a draft (draft only)
+    .post(
+      "/d/:id/signers",
+      async ({ params, query, body, set }) => {
+        const added = await addSignerToDraft(db, params.id, query.token ?? "", {
+          name: body.name,
+          email: body.email,
+        });
+        if (!added) {
+          set.status = 400;
+          return { ok: false, error: "not_a_draft_or_invalid" };
+        }
+        return { ok: true, signer: added };
+      },
+      { body: t.Object({ name: t.String(), email: t.Optional(t.String()) }) },
+    )
+    // update a draft signer's name/email (draft only)
+    .patch(
+      "/d/:id/signers/:signerId",
+      async ({ params, query, body, set }) => {
+        const ok = await updateDraftSigner(
+          db,
+          params.id,
+          query.token ?? "",
+          params.signerId,
+          { name: body.name, email: body.email },
+        );
+        if (!ok) {
+          set.status = 400;
+          return { ok: false, error: "not_a_draft_or_not_found" };
+        }
+        return { ok: true };
+      },
+      {
+        body: t.Object({
+          name: t.Optional(t.String()),
+          email: t.Optional(t.String()),
+        }),
+      },
+    )
+    // remove a signer from a draft (draft only, never the last one)
+    .delete("/d/:id/signers/:signerId", async ({ params, query, set }) => {
+      const ok = await removeSignerFromDraft(
+        db,
+        params.id,
+        query.token ?? "",
+        params.signerId,
+      );
+      if (!ok) {
+        set.status = 400;
+        return { ok: false, error: "not_a_draft_or_last_signer" };
+      }
+      return { ok: true };
     })
     // save the draft's document + field layout as a reusable template
     .post("/d/:id/template", async ({ params, query, set }) => {
