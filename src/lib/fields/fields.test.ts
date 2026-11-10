@@ -51,6 +51,38 @@ describe("field detection", () => {
     expect(await detectFields(await doc.save())).toHaveLength(0);
   });
 
+  test("does not detect prose that merely mentions sign/date/initials", async () => {
+    const doc = await PDFDocument.create();
+    const page = doc.addPage([612, 792]);
+    const font = await doc.embedFont(StandardFonts.Helvetica);
+    // a legal document says these words constantly; none are fillable spots
+    for (const [i, line] of [
+      "effective as of the date the last Member signs this Agreement,",
+      "and the relationship among the Members from the date written",
+      "each Member's spouse shall sign a Spousal Acknowledgment, and",
+      "a failure or refusal to sign is not a breach of this Agreement.",
+    ].entries()) {
+      page.drawText(line, { x: 72, y: 700 - i * 20, size: 11, font });
+    }
+    expect(await detectFields(await doc.save())).toHaveLength(0);
+  });
+
+  test("treats a long underscore signing line as a signature, not the trailing label", async () => {
+    const doc = await PDFDocument.create();
+    const page = doc.addPage([612, 792]);
+    const font = await doc.embedFont(StandardFonts.Helvetica);
+    // common signature-block shape: sign on the long line, "Date" labels a field
+    page.drawText("________________________________________ Date", {
+      x: 72,
+      y: 200,
+      size: 12,
+      font,
+    });
+    const fields = await detectFields(await doc.save());
+    expect(fields).toHaveLength(1);
+    expect(fields[0]?.type).toBe("signature");
+  });
+
   test("tolerates a non-PDF without throwing", async () => {
     expect(await detectFields(new Uint8Array([1, 2, 3]))).toEqual([]);
   });

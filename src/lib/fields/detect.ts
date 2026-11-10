@@ -40,6 +40,31 @@ const classify = (str: string): FieldType | null => {
 };
 
 /**
+ * Classify a blank by the nearest anchor label to its left on the same line,
+ * for signature blocks that split the label and the blank into separate runs
+ * ("Signature:" then "______"). Returns null when no label precedes the blank.
+ */
+const labelToLeft = (blank: TextItem, items: TextItem[]): FieldType | null => {
+  const blankY = blank.transform[5] ?? 0;
+  const blankX = blank.transform[4] ?? 0;
+  let best: FieldType | null = null;
+  let bestX = Number.NEGATIVE_INFINITY;
+  for (const item of items) {
+    if (item === blank) continue;
+    const y = item.transform[5] ?? 0;
+    const x = item.transform[4] ?? 0;
+    if (Math.abs(y - blankY) > 5) continue; // same line
+    if (x >= blankX) continue; // to the left of the blank
+    const type = classify(item.str);
+    if (type && x > bestX) {
+      best = type;
+      bestX = x;
+    }
+  }
+  return best;
+};
+
+/**
  * Place a field for an anchor item. When the run carries a blank line
  * (underscores), the field overlays it; otherwise it sits just to the right of
  * the label, where a signer would write.
@@ -124,8 +149,21 @@ export const detectFields = async (
     const fields: DetectedField[] = [];
     for (const { page, items } of pages) {
       for (const item of items) {
-        if (!item.str?.trim()) continue;
-        const type = classify(item.str);
+        // A real field is a blank to fill (an underscore line), not a prose
+        // mention of "sign"/"date"/"initials". Requiring a blank is what keeps a
+        // legal document from sprouting a field next to every such word. Classify
+        // the blank by an anchor in its own run, else by the nearest anchor
+        // label to its left on the same line ("Signature:" then "______")
+        const blank = item.str.match(UNDERSCORES)?.[0];
+        if (!blank) continue;
+        // A long underscore run is a signing line: sign on the line itself. A
+        // trailing label ("____ Date") names a separate field, not the blank, so
+        // it must not re-type the signing line. Short blanks are typed by their
+        // own anchor, else by the nearest label to the left
+        const type =
+          blank.length >= 18
+            ? "signature"
+            : (classify(item.str) ?? labelToLeft(item, items));
         if (!type) continue;
         fields.push(place(type, item, page));
       }
