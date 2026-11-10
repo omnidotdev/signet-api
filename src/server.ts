@@ -28,6 +28,7 @@ import {
   getStatus,
   listWorkspaceDocuments,
   removeSignerFromDraft,
+  renameOwnedDocument,
   saveFields,
   sendDraft,
   sendOwnedDraft,
@@ -417,6 +418,29 @@ if (hasDb) {
         })),
       };
     })
+    // rename a document the signed-in owner owns
+    .patch(
+      "/api/documents/:id",
+      async ({ params, body, session, set }) => {
+        if (!session) {
+          set.status = 401;
+          return { ok: false };
+        }
+        const name = await renameOwnedDocument(
+          db,
+          params.id,
+          session.sub,
+          (session.workspaces ?? []).map((w) => w.id),
+          body.name,
+        );
+        if (!name) {
+          set.status = 404;
+          return { ok: false };
+        }
+        return { ok: true, name };
+      },
+      { body: t.Object({ name: t.String() }) },
+    )
     // delete a document the signed-in owner owns (draft or sent)
     .delete("/api/documents/:id", async ({ params, session, set }) => {
       if (!session) {

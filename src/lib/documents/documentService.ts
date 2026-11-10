@@ -451,6 +451,32 @@ export const sendOwnedDraft = async (
 };
 
 /**
+ * Rename a document the owner owns (or shares through a workspace). Returns the
+ * new name on success, or null when the owner may not rename it or the name is
+ * empty.
+ */
+export const renameOwnedDocument = async (
+  db: Db,
+  id: string,
+  ownerId: string,
+  workspaceIds: string[],
+  name: string,
+): Promise<string | null> => {
+  const trimmed = name.trim().slice(0, 200);
+  if (!trimmed) return null;
+  const access = [eq(document.ownerId, ownerId)];
+  if (workspaceIds.length > 0) {
+    access.push(inArray(document.organizationId, workspaceIds));
+  }
+  const updated = await db
+    .update(document)
+    .set({ name: trimmed, updatedAt: new Date() })
+    .where(and(eq(document.id, id), or(...access)))
+    .returning({ id: document.id });
+  return updated.length > 0 ? trimmed : null;
+};
+
+/**
  * Permanently delete a document the owner owns (or shares through a workspace),
  * with its signers, fields, provenance, and stored PDFs. Returns true on
  * delete, false when the owner may not delete it.
@@ -1396,9 +1422,77 @@ export interface OwnerDocument {
   createdAt: string;
   manageToken: string;
   hasSignedPdf: boolean;
+  /** the first signer's name, for a one-line summary */
   signerName: string | null;
+  /** the first signer's status */
   signerStatus: string | null;
+  /** total number of signers on the document */
+  signerCount: number;
 }
+
+interface DocumentRow {
+  id: string;
+  name: string;
+  status: string;
+  createdAt: Date;
+  manageToken: string;
+  signedPdf: string | null;
+  signedPdfKey: string | null;
+}
+
+const DOCUMENT_COLUMNS = {
+  id: document.id,
+  name: document.name,
+  status: document.status,
+  createdAt: document.createdAt,
+  manageToken: document.manageToken,
+  signedPdf: document.signedPdf,
+  signedPdfKey: document.signedPdfKey,
+};
+
+/**
+ * Turn document rows into OwnerDocuments, attaching each document's signers in
+ * one extra query. Kept separate from the document query so a multi-signer
+ * document is one row, not one row per signer (which duplicated the history).
+ */
+const toOwnerDocuments = async (
+  db: Db,
+  docRows: DocumentRow[],
+): Promise<OwnerDocument[]> => {
+  if (docRows.length === 0) return [];
+  const ids = docRows.map((r) => r.id);
+  const signerRows = await db
+    .select({
+      documentId: signer.documentId,
+      name: signer.name,
+      status: signer.status,
+    })
+    .from(signer)
+    .where(inArray(signer.documentId, ids))
+    .orderBy(asc(signer.orderIndex));
+
+  const byDoc = new Map<string, { name: string; status: string }[]>();
+  for (const s of signerRows) {
+    const list = byDoc.get(s.documentId) ?? [];
+    list.push({ name: s.name, status: s.status });
+    byDoc.set(s.documentId, list);
+  }
+
+  return docRows.map((r) => {
+    const signers = byDoc.get(r.id) ?? [];
+    return {
+      id: r.id,
+      name: r.name,
+      status: r.status,
+      createdAt: r.createdAt.toISOString(),
+      manageToken: r.manageToken,
+      hasSignedPdf: r.signedPdf !== null || r.signedPdfKey !== null,
+      signerName: signers[0]?.name ?? null,
+      signerStatus: signers[0]?.status ?? null,
+      signerCount: signers.length,
+    };
+  });
+};
 
 /**
  * List a signed-in owner's documents, newest first, for their dashboard. Each
@@ -1410,32 +1504,11 @@ export const listDocumentsByOwner = async (
   ownerId: string,
 ): Promise<OwnerDocument[]> => {
   const rows = await db
-    .select({
-      id: document.id,
-      name: document.name,
-      status: document.status,
-      createdAt: document.createdAt,
-      manageToken: document.manageToken,
-      signedPdf: document.signedPdf,
-      signedPdfKey: document.signedPdfKey,
-      signerName: signer.name,
-      signerStatus: signer.status,
-    })
+    .select(DOCUMENT_COLUMNS)
     .from(document)
-    .leftJoin(signer, eq(signer.documentId, document.id))
     .where(eq(document.ownerId, ownerId))
     .orderBy(desc(document.createdAt));
-
-  return rows.map((r) => ({
-    id: r.id,
-    name: r.name,
-    status: r.status,
-    createdAt: r.createdAt.toISOString(),
-    manageToken: r.manageToken,
-    hasSignedPdf: r.signedPdf !== null || r.signedPdfKey !== null,
-    signerName: r.signerName,
-    signerStatus: r.signerStatus,
-  }));
+  return toOwnerDocuments(db, rows);
 };
 
 /**
@@ -1456,32 +1529,11 @@ export const listWorkspaceDocuments = async (
       )
     : eq(document.ownerId, ownerId);
   const rows = await db
-    .select({
-      id: document.id,
-      name: document.name,
-      status: document.status,
-      createdAt: document.createdAt,
-      manageToken: document.manageToken,
-      signedPdf: document.signedPdf,
-      signedPdfKey: document.signedPdfKey,
-      signerName: signer.name,
-      signerStatus: signer.status,
-    })
+    .select(DOCUMENT_COLUMNS)
     .from(document)
-    .leftJoin(signer, eq(signer.documentId, document.id))
     .where(scope)
     .orderBy(desc(document.createdAt));
-
-  return rows.map((r) => ({
-    id: r.id,
-    name: r.name,
-    status: r.status,
-    createdAt: r.createdAt.toISOString(),
-    manageToken: r.manageToken,
-    hasSignedPdf: r.signedPdf !== null || r.signedPdfKey !== null,
-    signerName: r.signerName,
-    signerStatus: r.signerStatus,
-  }));
+  return toOwnerDocuments(db, rows);
 };
 
 /**
