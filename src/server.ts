@@ -60,6 +60,9 @@ const js = (path: string) =>
     },
   });
 
+// the public Omni Signing Root CA, published so verifiers can trust the chain
+const ROOT_CA_PATH = requireFile.resolve("../certs/omni-signing-root-ca.pem");
+
 const signer = loadServiceSigner();
 const port = Number(process.env.PORT ?? 3000);
 const baseUrl = process.env.PUBLIC_BASE_URL ?? `http://localhost:${port}`;
@@ -119,6 +122,17 @@ const app = new Elysia()
     objectStorage: pdfStorageEnabled(),
   }))
   // pdf.js assets for the editor
+  // the Omni Signing Root CA (PEM), so verifiers can trust Signet's chain
+  .get(
+    "/omni-signing-root-ca.pem",
+    () =>
+      new Response(Bun.file(ROOT_CA_PATH), {
+        headers: {
+          "content-type": "application/x-pem-file",
+          "cache-control": "public, max-age=86400",
+        },
+      }),
+  )
   .get("/assets/pdf/pdf.min.mjs", () => js(PDFJS_MAIN))
   .get("/assets/pdf/pdf.worker.min.mjs", () => js(PDFJS_WORKER))
   // stateless quick-sign
