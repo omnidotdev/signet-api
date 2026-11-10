@@ -4,6 +4,13 @@ import type { Db } from "../db/client.ts";
 import type { TemplateField } from "../db/schema.ts";
 import { document, field, signatureEvent, signer } from "../db/schema.ts";
 import { generateToken } from "../db/tokens.ts";
+import {
+  emitDocumentCompleted,
+  emitDocumentCreated,
+  emitDocumentSent,
+  emitDocumentVoided,
+  emitSignatureCompleted,
+} from "../events/signetEvents.ts";
 import { detectFields } from "../fields/detect.ts";
 import { initialsOf, stampFields } from "../fields/stamp.ts";
 import type { ProvenanceEvent } from "../provenance/ledger.ts";
@@ -154,6 +161,24 @@ export const createSigningRequest = async (
     },
   });
 
+  // a single-signer request is created and sent in one step
+  const ownerId = input.ownerId ?? null;
+  emitDocumentCreated({
+    documentId: doc.id,
+    name: input.name,
+    ownerId,
+    signerCount: 1,
+    signingMode: "parallel",
+    fieldCount: detected.length,
+  });
+  emitDocumentSent({
+    documentId: doc.id,
+    name: input.name,
+    ownerId,
+    signerCount: 1,
+    signingMode: "parallel",
+  });
+
   return { id: doc.id, manageToken, signToken };
 };
 
@@ -250,6 +275,16 @@ export const createDraft = async (
       signers: input.signers.length,
       fields: placed.length,
     },
+  });
+
+  // a draft is created but not yet sent (see sendDraft)
+  emitDocumentCreated({
+    documentId: doc.id,
+    name: input.name,
+    ownerId: input.ownerId ?? null,
+    signerCount: input.signers.length,
+    signingMode: input.signingMode ?? "parallel",
+    fieldCount: placed.length,
   });
 
   return { id: doc.id, manageToken };
@@ -383,7 +418,12 @@ export const sendDraft = async (
   manageToken: string,
 ): Promise<SendResult | null> => {
   const [doc] = await db
-    .select({ status: document.status, signingMode: document.signingMode })
+    .select({
+      status: document.status,
+      signingMode: document.signingMode,
+      name: document.name,
+      ownerId: document.ownerId,
+    })
     .from(document)
     .where(and(eq(document.id, id), eq(document.manageToken, manageToken)));
   if (!doc || doc.status !== "draft") return null;
@@ -413,6 +453,15 @@ export const sendDraft = async (
     active:
       doc.signingMode !== "sequential" || s.orderIndex === rows[0]?.orderIndex,
   }));
+
+  emitDocumentSent({
+    documentId: id,
+    name: doc.name,
+    ownerId: doc.ownerId,
+    signerCount: rows.length,
+    signingMode: doc.signingMode,
+  });
+
   return { signers };
 };
 
@@ -681,6 +730,12 @@ export const signByToken = async (
       fields: myFields.length,
     },
   });
+  emitSignatureCompleted({
+    documentId: doc.id,
+    signerId: sgn.id,
+    signerName: adopted,
+    ownerId: doc.ownerId,
+  });
 
   // seal once every signer has signed
   const signers = await db
@@ -728,6 +783,12 @@ export const signByToken = async (
     await appendProvenance(db, doc.id, {
       type: "document.completed",
       data: { signers: signers.length },
+    });
+    emitDocumentCompleted({
+      documentId: doc.id,
+      name: doc.name,
+      ownerId: doc.ownerId,
+      signerCount: signers.length,
     });
   }
 
@@ -913,5 +974,6 @@ export const voidDocument = async (
     .set({ status: "voided", updatedAt: new Date() })
     .where(eq(document.id, id));
   await appendProvenance(db, id, { type: "document.voided", data: {} });
+  emitDocumentVoided({ documentId: id, ownerId: doc.ownerId });
   return true;
 };

@@ -1,6 +1,35 @@
+import { createEventsProvider } from "@omnidotdev/providers/events";
 import { createNotificationProvider } from "@omnidotdev/providers/notifications";
 
-const { HERALD_API_URL, HERALD_API_KEY, SIGNET_FROM_EMAIL } = process.env;
+const {
+  HERALD_API_URL,
+  HERALD_API_KEY,
+  SIGNET_FROM_EMAIL,
+  VORTEX_API_URL,
+  VORTEX_API_KEY,
+} = process.env;
+
+/**
+ * CloudEvents provider (Vortex). Emits `signet.document.*` / `signet.signature.*`
+ * lifecycle events. Falls back to a noop provider when Vortex is not configured,
+ * so signing works without it (events are simply not published)
+ */
+export const events = createEventsProvider(
+  VORTEX_API_URL && VORTEX_API_KEY
+    ? {
+        provider: "http",
+        baseUrl: VORTEX_API_URL,
+        apiKey: VORTEX_API_KEY,
+        source: "omni.signet",
+      }
+    : {},
+);
+
+if (!VORTEX_API_URL || !VORTEX_API_KEY) {
+  console.warn(
+    "VORTEX_API_URL/VORTEX_API_KEY not set, CloudEvents disabled (signing unaffected)",
+  );
+}
 
 /**
  * Transactional email provider (Herald). Falls back to a noop provider that
