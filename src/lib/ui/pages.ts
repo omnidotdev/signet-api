@@ -232,15 +232,39 @@ const templateRow = (t: TemplateRow): string =>
   </div>`;
 
 /** The owner dashboard: documents and reusable templates the sender owns */
+export interface DashboardWorkspaces {
+  workspaces: { id: string; slug?: string; name?: string }[];
+  activeId?: string;
+}
+
+/** The workspace switcher: a lightweight <select> when the sender has 2+ */
+const workspaceSwitcher = (ws?: DashboardWorkspaces): string => {
+  if (!ws || ws.workspaces.length < 2) return "";
+  const options = ws.workspaces
+    .map(
+      (w) =>
+        `<option value="${w.id}"${w.id === ws.activeId ? " selected" : ""}>${esc(
+          w.name || w.slug || "Workspace",
+        )}</option>`,
+    )
+    .join("");
+  return `<form method="post" action="/workspace/switch" class="ws-switch">
+    <label for="ws">Workspace</label>
+    <select id="ws" name="workspaceId" onchange="this.form.submit()">${options}</select>
+  </form>`;
+};
+
 export const dashboardPage = (
   email: string,
   docs: OwnerDocument[],
   templates: TemplateRow[] = [],
+  ws?: DashboardWorkspaces,
 ): string =>
   shell(
     "Your documents",
     `${authBar(email)}<h1>Your documents</h1>
-<p class="sub">Every signing request you have created.</p>
+<p class="sub">Documents in your active workspace, plus the ones you created.</p>
+${workspaceSwitcher(ws)}
 <div class="card">
 ${
   docs.length === 0

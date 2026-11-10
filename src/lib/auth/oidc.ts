@@ -98,6 +98,8 @@ const exchangeCode = async (
 /** A workspace (Gatekeeper organization) the sender belongs to */
 interface UserinfoOrg {
   id: string;
+  slug?: string;
+  name?: string;
   type?: string;
 }
 
@@ -176,12 +178,18 @@ export const completeLogin = async (
   let email = typeof payload.email === "string" ? payload.email : "";
   let name = typeof payload.name === "string" ? payload.name : undefined;
   let organizationId: string | undefined;
+  let workspaces: Session["workspaces"];
   if (tokens.access_token) {
     const info = await fetchUserinfo(config, tokens.access_token);
     email = email || (info.email ?? "");
     name = name ?? info.name;
     organizationId = activeOrg(info.organizations);
+    workspaces = info.organizations.map((o) => ({
+      id: o.id,
+      slug: o.slug,
+      name: o.name,
+    }));
   }
 
-  return { sub: payload.sub, email, name, organizationId };
+  return { sub: payload.sub, email, name, organizationId, workspaces };
 };

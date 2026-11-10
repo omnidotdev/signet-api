@@ -12,13 +12,22 @@ const ALG = "HS256";
 const encoder = new TextEncoder();
 const key = (secret: string) => encoder.encode(secret);
 
+/** A workspace (Gatekeeper organization) the sender belongs to */
+export interface Workspace {
+  id: string;
+  slug?: string;
+  name?: string;
+}
+
 /** The authenticated sender carried in the session cookie */
 export interface Session {
   sub: string;
   email: string;
   name?: string;
-  /** active workspace (Gatekeeper organization) id, stamped on new documents */
+  /** active workspace id, stamped on new documents and scoping the dashboard */
   organizationId?: string;
+  /** every workspace the sender belongs to, for the switcher and access checks */
+  workspaces?: Workspace[];
 }
 
 /** The in-flight OIDC login carried in the transaction cookie */
@@ -39,6 +48,7 @@ export const signSession = (
     email: session.email,
     name: session.name,
     organizationId: session.organizationId,
+    workspaces: session.workspaces,
   })
     .setProtectedHeader({ alg: ALG })
     .setSubject(session.sub)
@@ -65,6 +75,9 @@ export const verifySession = async (
         typeof payload.organizationId === "string"
           ? payload.organizationId
           : undefined,
+      workspaces: Array.isArray(payload.workspaces)
+        ? (payload.workspaces as Workspace[])
+        : undefined,
     };
   } catch {
     return null;

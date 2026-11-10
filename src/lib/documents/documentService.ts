@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { and, asc, desc, eq, lt, ne } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, lt, ne, or } from "drizzle-orm";
 import type { Db } from "../db/client.ts";
 import type { TemplateField } from "../db/schema.ts";
 import { document, field, signatureEvent, signer } from "../db/schema.ts";
@@ -1121,6 +1121,77 @@ export const listDocumentsByOwner = async (
     signerName: r.signerName,
     signerStatus: r.signerStatus,
   }));
+};
+
+/**
+ * List documents for a sender's dashboard, scoped to the active workspace. A
+ * safe superset: the active workspace's documents (visible to every member)
+ * plus anything the sender personally owns, so switching workspace never hides
+ * a sender's own documents and workspace members see shared ones.
+ */
+export const listWorkspaceDocuments = async (
+  db: Db,
+  ownerId: string,
+  organizationId: string | undefined,
+): Promise<OwnerDocument[]> => {
+  const scope = organizationId
+    ? or(
+        eq(document.organizationId, organizationId),
+        eq(document.ownerId, ownerId),
+      )
+    : eq(document.ownerId, ownerId);
+  const rows = await db
+    .select({
+      id: document.id,
+      name: document.name,
+      status: document.status,
+      createdAt: document.createdAt,
+      manageToken: document.manageToken,
+      signedPdf: document.signedPdf,
+      signedPdfKey: document.signedPdfKey,
+      signerName: signer.name,
+      signerStatus: signer.status,
+    })
+    .from(document)
+    .leftJoin(signer, eq(signer.documentId, document.id))
+    .where(scope)
+    .orderBy(desc(document.createdAt));
+
+  return rows.map((r) => ({
+    id: r.id,
+    name: r.name,
+    status: r.status,
+    createdAt: r.createdAt.toISOString(),
+    manageToken: r.manageToken,
+    hasSignedPdf: r.signedPdf !== null || r.signedPdfKey !== null,
+    signerName: r.signerName,
+    signerStatus: r.signerStatus,
+  }));
+};
+
+/**
+ * Return a signed document's bytes when the requester may access it: they own
+ * it, or it belongs to one of their workspaces. Null otherwise or if unsigned.
+ */
+export const getSignedPdfForMember = async (
+  db: Db,
+  id: string,
+  ownerId: string,
+  workspaceIds: string[],
+): Promise<Uint8Array | null> => {
+  const access = [eq(document.ownerId, ownerId)];
+  if (workspaceIds.length > 0) {
+    access.push(inArray(document.organizationId, workspaceIds));
+  }
+  const [doc] = await db
+    .select({
+      signedPdf: document.signedPdf,
+      signedPdfKey: document.signedPdfKey,
+    })
+    .from(document)
+    .where(and(eq(document.id, id), or(...access)));
+  if (!doc || (!doc.signedPdf && !doc.signedPdfKey)) return null;
+  return loadPdf(doc.signedPdf ?? "", doc.signedPdfKey);
 };
 
 /** Return the signed PDF for a document the given owner owns, else null */

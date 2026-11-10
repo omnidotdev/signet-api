@@ -20,11 +20,11 @@ import {
   createSigningRequest,
   getEditorData,
   getSignedPdf,
-  getSignedPdfForOwner,
+  getSignedPdfForMember,
   getSignedPdfForSignToken,
   getSignerFillData,
   getStatus,
-  listDocumentsByOwner,
+  listWorkspaceDocuments,
   removeSignerFromDraft,
   saveFields,
   sendDraft,
@@ -548,7 +548,7 @@ if (hasDb) {
 
   if (authEnabled) {
     app
-      // the owner dashboard: documents and templates the signed-in sender owns
+      // the dashboard: documents (scoped to the active workspace) and templates
       .get("/dashboard", async ({ session, set }) => {
         if (!session) {
           set.status = 302;
@@ -556,19 +556,62 @@ if (hasDb) {
           return null;
         }
         const [docs, templates] = await Promise.all([
-          listDocumentsByOwner(db, session.sub),
+          listWorkspaceDocuments(db, session.sub, session.organizationId),
           listTemplates(db, session.sub),
         ]);
-        return html(dashboardPage(session.email, docs, templates));
+        return html(
+          dashboardPage(session.email, docs, templates, {
+            workspaces: session.workspaces ?? [],
+            activeId: session.organizationId,
+          }),
+        );
       })
-      // owner downloads a signed document, authorized by session, not a token
+      // switch the active workspace (must be one the sender belongs to)
+      .post(
+        "/workspace/switch",
+        async ({ session, body, cookie, set }) => {
+          if (!session || !authConfig) {
+            set.status = 401;
+            return { ok: false };
+          }
+          const member = (session.workspaces ?? []).some(
+            (w) => w.id === body.workspaceId,
+          );
+          if (!member) {
+            set.status = 400;
+            return { ok: false, error: "not_a_member" };
+          }
+          const token = await signSession(
+            { ...session, organizationId: body.workspaceId },
+            authConfig.sessionSecret,
+          );
+          cookie[SESSION_COOKIE]?.set({
+            value: token,
+            httpOnly: true,
+            secure: secureCookies,
+            sameSite: "lax",
+            path: "/",
+            maxAge: SESSION_MAX_AGE,
+          });
+          set.status = 302;
+          set.headers.location = "/dashboard";
+          return null;
+        },
+        { body: t.Object({ workspaceId: t.String() }) },
+      )
+      // download a signed document, authorized by ownership or workspace membership
       .get("/dashboard/d/:id/signed", async ({ session, params, set }) => {
         if (!session) {
           set.status = 302;
           set.headers.location = "/login";
           return null;
         }
-        const signed = await getSignedPdfForOwner(db, params.id, session.sub);
+        const signed = await getSignedPdfForMember(
+          db,
+          params.id,
+          session.sub,
+          (session.workspaces ?? []).map((w) => w.id),
+        );
         if (!signed) {
           set.status = 404;
           return { error: "not_available" };
