@@ -19,6 +19,7 @@ import type { EditorField } from "./lib/documents/documentService.ts";
 import {
   addSignerForOwner,
   addSignerToDraft,
+  addSignerToSentDocument,
   buildCertificateForOwner,
   buildCertificateForToken,
   correctOwnedSigner,
@@ -37,6 +38,7 @@ import {
   getStatus,
   listWorkspaceDocuments,
   remindOwnedDocument,
+  removePendingSignerFromSent,
   removeSignerForOwner,
   removeSignerFromDraft,
   renameOwnedDocument,
@@ -762,7 +764,8 @@ if (hasDb) {
         };
       },
     )
-    // add a signer to a draft the owner owns (owner-scoped, draft only)
+    // add a signer (owner-scoped): to a draft, or as a late approver on a sent
+    // document (in which case they are emailed their signing link)
     .post(
       "/api/documents/:id/signers",
       async ({ params, body, session, set }) => {
@@ -770,18 +773,37 @@ if (hasDb) {
           set.status = 401;
           return { ok: false };
         }
-        const added = await addSignerForOwner(
+        const workspaceIds = (session.workspaces ?? []).map((w) => w.id);
+        const input = { name: body.name, email: body.email };
+        const draftAdded = await addSignerForOwner(
           db,
           params.id,
           session.sub,
-          (session.workspaces ?? []).map((w) => w.id),
-          { name: body.name, email: body.email },
+          workspaceIds,
+          input,
         );
-        if (!added) {
+        if (draftAdded) return { ok: true, signer: draftAdded };
+
+        const sentAdded = await addSignerToSentDocument(
+          db,
+          params.id,
+          session.sub,
+          workspaceIds,
+          input,
+        );
+        if (!sentAdded) {
           set.status = 400;
           return { ok: false };
         }
-        return { ok: true, signer: added };
+        if (sentAdded.email) {
+          void sendSignatureRequestEmail({
+            to: sentAdded.email,
+            signerName: sentAdded.name,
+            documentName: sentAdded.documentName,
+            signUrl: `${appBaseUrl}/sign/${sentAdded.signToken}`,
+          });
+        }
+        return { ok: true, signer: sentAdded };
       },
       { body: t.Object({ name: t.String(), email: t.Optional(t.String()) }) },
     )
@@ -814,7 +836,8 @@ if (hasDb) {
         }),
       },
     )
-    // remove a signer from a draft the owner owns (never the last one)
+    // remove a signer (owner-scoped): from a draft, or a still-pending signer
+    // from a sent document. Never the last signer; signed signers are immutable
     .delete(
       "/api/documents/:id/signers/:signerId",
       async ({ params, session, set }) => {
@@ -822,13 +845,22 @@ if (hasDb) {
           set.status = 401;
           return { ok: false };
         }
-        const ok = await removeSignerForOwner(
-          db,
-          params.id,
-          session.sub,
-          (session.workspaces ?? []).map((w) => w.id),
-          params.signerId,
-        );
+        const workspaceIds = (session.workspaces ?? []).map((w) => w.id);
+        const ok =
+          (await removeSignerForOwner(
+            db,
+            params.id,
+            session.sub,
+            workspaceIds,
+            params.signerId,
+          )) ||
+          (await removePendingSignerFromSent(
+            db,
+            params.id,
+            session.sub,
+            workspaceIds,
+            params.signerId,
+          ));
         if (!ok) {
           set.status = 400;
           return { ok: false };
