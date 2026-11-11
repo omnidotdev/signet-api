@@ -42,6 +42,7 @@ import {
   sendOwnedDraft,
   signByToken,
   updateDraftSigner,
+  verifySignerAccess,
   voidDocument,
 } from "./lib/documents/documentService.ts";
 import {
@@ -308,15 +309,24 @@ if (hasDb) {
         // Multi-signer send: a JSON `signers` array ([{name,email?}]) takes
         // precedence. Each party is auto-assigned their own signing line and
         // emailed their link (sequential sends email only the first signer now)
-        let parsedSigners: { name: string; email?: string }[] = [];
+        let parsedSigners: {
+          name: string;
+          email?: string;
+          accessCode?: string;
+        }[] = [];
         if (body.signers) {
           try {
             parsedSigners = (
-              JSON.parse(body.signers) as { name?: string; email?: string }[]
+              JSON.parse(body.signers) as {
+                name?: string;
+                email?: string;
+                accessCode?: string;
+              }[]
             )
               .map((s) => ({
                 name: (s.name ?? "").trim(),
                 email: s.email?.trim() || undefined,
+                accessCode: s.accessCode?.trim() || undefined,
               }))
               .filter((s) => s.name);
           } catch {
@@ -786,7 +796,20 @@ if (hasDb) {
       return { ok: true, id: result.id };
     })
     // signer fill data as JSON, for the native signer page on the app origin
-    .get("/api/sign/:token", async ({ params, set }) => {
+    .get("/api/sign/:token", async ({ params, headers, set }) => {
+      const access = await verifySignerAccess(
+        db,
+        params.token,
+        headers["x-signet-access-code"],
+      );
+      if (access === "not_found") {
+        set.status = 404;
+        return { error: "not_found" };
+      }
+      if (access === "locked") {
+        set.status = 401;
+        return { locked: true };
+      }
       const data = await getSignerFillData(db, params.token);
       if (!data) {
         set.status = 404;
@@ -796,6 +819,8 @@ if (hasDb) {
     })
     // signer-facing fill overlay
     .get("/sign/:token", async ({ params }) => {
+      if ((await verifySignerAccess(db, params.token)) === "locked")
+        return html(notFoundPage());
       const data = await getSignerFillData(db, params.token);
       if (!data) return html(notFoundPage());
       return html(signerFillPage(data, params.token));
@@ -813,10 +838,16 @@ if (hasDb) {
             signatureImage: body?.signatureImage ?? null,
             textValues: body?.textValues ?? {},
             consent: body?.consent ?? false,
+            accessCode: body?.accessCode ?? undefined,
           },
         );
         if (!result.ok) {
-          set.status = result.error === "not_found" ? 404 : 409;
+          set.status =
+            result.error === "not_found"
+              ? 404
+              : result.error === "locked"
+                ? 401
+                : 409;
           return { ok: false, error: result.error };
         }
         // sequential routing: hand off to the next signer by email
@@ -860,6 +891,7 @@ if (hasDb) {
             signatureImage: t.Optional(t.Union([t.String(), t.Null()])),
             textValues: t.Optional(t.Record(t.String(), t.String())),
             consent: t.Optional(t.Boolean()),
+            accessCode: t.Optional(t.String()),
           }),
         ),
       },

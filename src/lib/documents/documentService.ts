@@ -203,6 +203,8 @@ export const createSigningRequest = async (
 export interface DraftSignerInput {
   name: string;
   email?: string;
+  /** optional access code the signer must enter to open the document */
+  accessCode?: string;
 }
 
 export interface MultiSignerRequestInput {
@@ -313,6 +315,7 @@ export const createMultiSignerRequest = async (
         name: s.name,
         email: s.email ?? null,
         signToken: generateToken(),
+        accessCode: s.accessCode?.trim() || null,
         status: "pending",
         orderIndex: i,
         color: SIGNER_COLORS[i % SIGNER_COLORS.length],
@@ -876,6 +879,7 @@ export const createDraft = async (
         name: s.name,
         email: s.email ?? null,
         signToken: generateToken(),
+        accessCode: s.accessCode?.trim() || null,
         status: "pending",
         orderIndex: i,
         color: SIGNER_COLORS[i % SIGNER_COLORS.length],
@@ -1431,8 +1435,41 @@ export interface SignerFillData {
 }
 
 /**
+ * Whether a signer's token can be opened: "not_found" for an unknown token,
+ * "locked" when the signer has an access code and the supplied one does not
+ * match (only while they still have to act), else "ok". Checked before any
+ * fill data is revealed or a view is recorded.
+ */
+export const verifySignerAccess = async (
+  db: Db,
+  signToken: string,
+  providedCode?: string,
+): Promise<"ok" | "locked" | "not_found"> => {
+  const [row] = await db
+    .select({
+      accessCode: signer.accessCode,
+      signerStatus: signer.status,
+      documentStatus: document.status,
+    })
+    .from(signer)
+    .innerJoin(document, eq(signer.documentId, document.id))
+    .where(eq(signer.signToken, signToken));
+  if (!row) return "not_found";
+  if (
+    row.accessCode &&
+    row.signerStatus !== "signed" &&
+    row.documentStatus !== "completed" &&
+    (providedCode ?? "").trim() !== row.accessCode
+  ) {
+    return "locked";
+  }
+  return "ok";
+};
+
+/**
  * Everything the signer's fill overlay needs: the document, this signer's
  * fields, and the PDF. Records a view event the first time, like getSignerView.
+ * Callers gate on verifySignerAccess first when an access code may apply.
  */
 export const getSignerFillData = async (
   db: Db,
@@ -1554,6 +1591,8 @@ export interface SignOptions {
   textValues?: Record<string, string>;
   /** the signer affirmed the electronic-records (ESIGN / UETA) consent */
   consent?: boolean;
+  /** access code the signer entered, checked against the signer's code */
+  accessCode?: string;
 }
 
 export const signByToken = async (
@@ -1569,6 +1608,9 @@ export const signByToken = async (
     .where(eq(signer.signToken, signToken));
   if (!sgn) return { ok: false, error: "not_found" };
   if (sgn.status === "signed") return { ok: false, error: "already_signed" };
+  // enforce the access code server-side, never trust the client gate alone
+  if (sgn.accessCode && (options?.accessCode ?? "").trim() !== sgn.accessCode)
+    return { ok: false, error: "locked" };
 
   const [doc] = await db
     .select()
