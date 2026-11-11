@@ -458,6 +458,7 @@ export interface DocumentDetail {
   signingMode: string;
   hasSignedPdf: boolean;
   signers: {
+    id: string;
     name: string;
     email: string | null;
     status: string;
@@ -558,6 +559,7 @@ export const getDocumentDetailForOwner = async (
     signingMode: doc.signingMode,
     hasSignedPdf: doc.signedPdf !== null || doc.signedPdfKey !== null,
     signers: signers.map((s) => ({
+      id: s.id,
       name: s.name,
       email: s.email,
       status: s.status,
@@ -582,13 +584,15 @@ export const getDocumentDetailForOwner = async (
  * The pending signers to remind now for a document the owner owns: those not
  * yet signed and currently active (sequential: only the current signer), with
  * an email. Stamps lastReminderAt. Null when the document is not the owner's or
- * not awaiting signatures.
+ * not awaiting signatures. Pass signerId to remind only that one signer, still
+ * subject to the same pending + in-turn eligibility.
  */
 export const remindOwnedDocument = async (
   db: Db,
   id: string,
   ownerId: string,
   workspaceIds: string[],
+  signerId?: string,
 ): Promise<{
   documentName: string;
   signers: { name: string; email: string; signToken: string }[];
@@ -610,6 +614,7 @@ export const remindOwnedDocument = async (
     (s) =>
       s.status !== "signed" &&
       s.email &&
+      (!signerId || s.id === signerId) &&
       (doc.signingMode !== "sequential" || s.orderIndex === firstUnsigned),
   );
   if (pending.length === 0) return null;
@@ -1429,6 +1434,8 @@ export interface SignOptions {
   signatureImage?: string | null;
   /** per-field text the signer typed, keyed by field id */
   textValues?: Record<string, string>;
+  /** the signer affirmed the electronic-records (ESIGN / UETA) consent */
+  consent?: boolean;
 }
 
 export const signByToken = async (
@@ -1499,6 +1506,7 @@ export const signByToken = async (
       signer: adopted,
       contentHash: doc.contentHash,
       fields: myFields.length,
+      consent: options?.consent === true,
     },
   });
   emitSignatureCompleted({
