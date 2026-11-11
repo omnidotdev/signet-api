@@ -18,6 +18,8 @@ import { getDb, runMigrations } from "./lib/db/client.ts";
 import type { EditorField } from "./lib/documents/documentService.ts";
 import {
   addSignerToDraft,
+  buildCertificateForOwner,
+  buildCertificateForToken,
   createDraft,
   createMultiSignerRequest,
   deleteOwnedDocument,
@@ -465,6 +467,24 @@ if (hasDb) {
         file.signed ? "signed.pdf" : "document.pdf",
       );
     })
+    // the Certificate of Completion PDF for a completed document (owner-scoped)
+    .get("/api/documents/:id/certificate", async ({ params, session, set }) => {
+      if (!session) {
+        set.status = 401;
+        return { error: "unauthorized" };
+      }
+      const pdf = await buildCertificateForOwner(
+        db,
+        params.id,
+        session.sub,
+        (session.workspaces ?? []).map((w) => w.id),
+      );
+      if (!pdf) {
+        set.status = 404;
+        return { error: "not_found" };
+      }
+      return pdfResponse(pdf, "certificate.pdf");
+    })
     // resend the signing reminder to pending signers (owner-scoped)
     .post(
       "/api/documents/:id/remind",
@@ -852,6 +872,15 @@ if (hasDb) {
         return { error: "not_available" };
       }
       return pdfResponse(signed, "signed.pdf");
+    })
+    // a signer downloads the Certificate of Completion for their document
+    .get("/sign/:token/certificate", async ({ params, set }) => {
+      const pdf = await buildCertificateForToken(db, params.token);
+      if (!pdf) {
+        set.status = 404;
+        return { error: "not_available" };
+      }
+      return pdfResponse(pdf, "certificate.pdf");
     })
     // sender status (manage token)
     .get("/d/:id", async ({ params, query, set }) => {
