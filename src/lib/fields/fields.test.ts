@@ -150,6 +150,41 @@ describe("field stamping", () => {
     const out = await stampFields(pdf, []);
     expect(out).toBe(pdf);
   });
+
+  test("draws a mark for a ticked checkbox", async () => {
+    const pdf = await anchorPdf();
+    const stamped = await stampFields(pdf, [
+      {
+        type: "checkbox",
+        page: 1,
+        x: 100,
+        y: 200,
+        width: 14,
+        height: 14,
+        value: "true",
+      },
+    ]);
+    // a ticked box re-serializes the PDF with the drawn check mark
+    expect(stamped).not.toBe(pdf);
+    expect(stamped.length).toBeGreaterThan(0);
+  });
+
+  test("skips an unticked checkbox", async () => {
+    const pdf = await anchorPdf();
+    const stamped = await stampFields(pdf, [
+      {
+        type: "checkbox",
+        page: 1,
+        x: 100,
+        y: 200,
+        width: 14,
+        height: 14,
+        value: "",
+      },
+    ]);
+    // no value means nothing to draw, so the original PDF is returned unchanged
+    expect(stamped).toBe(pdf);
+  });
 });
 
 describe("initials", () => {

@@ -9,7 +9,7 @@
 import { PDFDocument, rgb, StandardFonts } from "pdf-lib";
 
 export interface StampField {
-  /** signature | date | initials | text */
+  /** signature | date | initials | text | checkbox */
   type: string;
   page: number;
   x: number;
@@ -63,6 +63,28 @@ export const stampFields = async (
   for (const field of toDraw) {
     const page = pages[field.page - 1];
     if (!page) continue;
+
+    if (field.type === "checkbox") {
+      // a ticked box draws a check mark; an unticked box carries no value and
+      // was filtered out above, so nothing is drawn for it
+      const box = Math.min(field.width, field.height);
+      const thickness = Math.max(1.2, box * 0.14);
+      const ox = field.x;
+      const oy = field.y;
+      page.drawLine({
+        start: { x: ox + box * 0.18, y: oy + box * 0.5 },
+        end: { x: ox + box * 0.42, y: oy + box * 0.26 },
+        thickness,
+        color: ink,
+      });
+      page.drawLine({
+        start: { x: ox + box * 0.42, y: oy + box * 0.26 },
+        end: { x: ox + box * 0.82, y: oy + box * 0.74 },
+        thickness,
+        color: ink,
+      });
+      continue;
+    }
 
     if (field.image) {
       const png = await doc.embedPng(field.image);
