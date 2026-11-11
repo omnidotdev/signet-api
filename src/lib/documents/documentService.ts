@@ -26,6 +26,8 @@ import {
   signedKey,
   storePdf,
 } from "../storage/pdfStore.ts";
+import type { CertificateData } from "./certificate.ts";
+import { buildCompletionCertificate } from "./certificate.ts";
 
 const sha256 = (bytes: Uint8Array): string =>
   createHash("sha256").update(bytes).digest("hex");
@@ -578,6 +580,119 @@ export const getDocumentDetailForOwner = async (
     provenanceValid: verifyLedger(chain).valid,
     trustedTimestamp: trustedTimestampFrom(chain),
   };
+};
+
+/**
+ * Assemble the Certificate of Completion data for a document from its rows and
+ * provenance chain: each signer's outcome and consent, the document
+ * fingerprint, the trusted timestamp, and the ordered audit trail.
+ */
+const assembleCertificate = (
+  doc: typeof document.$inferSelect,
+  signers: (typeof signer.$inferSelect)[],
+  chain: ProvenanceEvent[],
+): CertificateData => {
+  // consent affirmed per signer, keyed by the adopted name on the signed event
+  const consentByName = new Map<string, boolean>();
+  for (const e of chain) {
+    if (e.type !== "document.signed") continue;
+    const d = e.data as { signer?: unknown; consent?: unknown };
+    if (typeof d.signer === "string")
+      consentByName.set(d.signer, d.consent === true);
+  }
+  const completed = chain.find((e) => e.type === "document.completed");
+
+  return {
+    documentName: doc.name,
+    documentId: doc.id,
+    contentHash: doc.contentHash ?? null,
+    createdAt: doc.createdAt.toISOString(),
+    completedAt: completed?.timestamp ?? null,
+    provenanceValid: verifyLedger(chain).valid,
+    trustedTimestamp: trustedTimestampFrom(chain),
+    signers: signers.map((s) => ({
+      name: s.name,
+      email: s.email,
+      signedAt: s.signedAt ? s.signedAt.toISOString() : null,
+      consent: consentByName.get(s.name) ?? false,
+    })),
+    events: chain.map((e) => ({
+      type: e.type,
+      timestamp: e.timestamp,
+      signer:
+        typeof (e.data as { signer?: unknown }).signer === "string"
+          ? ((e.data as { signer: string }).signer ?? null)
+          : null,
+    })),
+  };
+};
+
+/** Load the ledger chain for a document id */
+const loadChain = async (db: Db, id: string): Promise<ProvenanceEvent[]> => {
+  const events = await db
+    .select()
+    .from(signatureEvent)
+    .where(eq(signatureEvent.documentId, id))
+    .orderBy(asc(signatureEvent.index));
+  return events.map((r) => ({
+    index: r.index,
+    timestamp: r.createdAt.toISOString(),
+    type: r.type,
+    data: r.data as Record<string, unknown>,
+    prevHash: r.prevHash,
+    hash: r.hash,
+  }));
+};
+
+/**
+ * Build the Certificate of Completion PDF for a document the owner owns. Null
+ * when the owner may not see it or the document has not completed yet.
+ */
+export const buildCertificateForOwner = async (
+  db: Db,
+  id: string,
+  ownerId: string,
+  workspaceIds: string[],
+): Promise<Uint8Array | null> => {
+  const [doc] = await db
+    .select()
+    .from(document)
+    .where(and(eq(document.id, id), ownerAccess(ownerId, workspaceIds)));
+  if (!doc || doc.status !== "completed") return null;
+  const signers = await db
+    .select()
+    .from(signer)
+    .where(eq(signer.documentId, id))
+    .orderBy(asc(signer.orderIndex));
+  const chain = await loadChain(db, id);
+  return buildCompletionCertificate(assembleCertificate(doc, signers, chain));
+};
+
+/**
+ * Build the Certificate of Completion PDF for a signer's token, once the
+ * document has completed. Null when the token is unknown or not yet complete.
+ */
+export const buildCertificateForToken = async (
+  db: Db,
+  signToken: string,
+): Promise<Uint8Array | null> => {
+  const [sgn] = await db
+    .select()
+    .from(signer)
+    .where(eq(signer.signToken, signToken));
+  if (!sgn) return null;
+  const [doc] = await db
+    .select()
+    .from(document)
+    .where(eq(document.id, sgn.documentId));
+  if (!doc || doc.status !== "completed") return null;
+  const signers = await db
+    .select()
+    .from(signer)
+    .where(eq(signer.documentId, doc.id))
+    .orderBy(asc(signer.orderIndex));
+  const chain = await loadChain(db, doc.id);
+  return buildCompletionCertificate(assembleCertificate(doc, signers, chain));
 };
 
 /**
@@ -1307,6 +1422,8 @@ export interface SignerFillData {
   documentName: string;
   signerName: string;
   alreadySigned: boolean;
+  /** whether the whole document is complete (every signer done, sealed) */
+  documentCompleted: boolean;
   /** in sequential mode, the name of the signer who must sign first, else null */
   waitingFor: string | null;
   pdfBase64: string;
@@ -1389,6 +1506,7 @@ export const getSignerFillData = async (
     signerName: row.signerName,
     alreadySigned:
       row.documentStatus === "completed" || row.signerStatus === "signed",
+    documentCompleted: row.documentStatus === "completed",
     waitingFor,
     pdfBase64,
     fields,

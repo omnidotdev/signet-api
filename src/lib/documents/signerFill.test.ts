@@ -6,6 +6,7 @@ import { extractText } from "../fields/detect.ts";
 import type { ServiceSigner } from "../signing/signerIdentity.ts";
 import { generateSelfSignedPkcs12 } from "../signing/signerIdentity.ts";
 import {
+  buildCertificateForToken,
   createDraft,
   getSignedPdf,
   getSignerFillData,
@@ -135,5 +136,46 @@ describe("signer fill overlay", () => {
     expect(signed).toBeInstanceOf(Uint8Array);
     // the typed text field is stamped; the signature is a drawn image
     expect(await extractText(signed as Uint8Array)).toContain("Acme Corp");
+  });
+
+  test("produces a certificate of completion only once completed", async () => {
+    const draft = await createDraft(db, {
+      name: "Contract",
+      pdf: await blankPdf(),
+      signers: [{ name: "Ada" }],
+    });
+    const data = await import("./documentService.ts").then((m) =>
+      m.getEditorData(db, draft.id, draft.manageToken),
+    );
+    await saveFields(db, draft.id, draft.manageToken, [
+      {
+        signerId: data?.signers[0]?.id ?? null,
+        type: "signature",
+        page: 1,
+        x: 100,
+        y: 400,
+        width: 160,
+        height: 20,
+      },
+    ]);
+    const sent = await sendDraft(db, draft.id, draft.manageToken);
+    const token = sent?.signers[0]?.signToken as string;
+
+    // not complete yet: no certificate
+    expect(await buildCertificateForToken(db, token)).toBeNull();
+
+    const result = await signByToken(db, serviceSigner, token, "Ada Lovelace", {
+      signatureImage: PNG_1X1,
+      consent: true,
+    });
+    expect(result.completed).toBe(true);
+
+    const cert = await buildCertificateForToken(db, token);
+    expect(cert).toBeInstanceOf(Uint8Array);
+    expect(new TextDecoder().decode((cert as Uint8Array).slice(0, 5))).toBe(
+      "%PDF-",
+    );
+    const parsed = await PDFDocument.load(cert as Uint8Array);
+    expect(parsed.getPageCount()).toBeGreaterThanOrEqual(1);
   });
 });
