@@ -54,6 +54,8 @@ export const signer = pgTable("signer", {
   email: text("email"),
   /** capability token embedded in the signer's shareable link */
   signToken: text("sign_token").notNull(),
+  /** optional access code the signer must enter to open the document */
+  accessCode: text("access_code"),
   /** pending | viewed | signed | declined */
   status: text("status").notNull().default("pending"),
   orderIndex: integer("order_index").notNull().default(0),

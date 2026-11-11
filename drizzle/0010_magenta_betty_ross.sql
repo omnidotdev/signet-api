@@ -1,0 +1,1 @@
+ALTER TABLE "signer" ADD COLUMN "access_code" text;
