@@ -1745,8 +1745,10 @@ export const signByToken = async (
     .where(and(eq(field.documentId, doc.id), eq(field.signerId, sgn.id)));
   for (const f of myFields) {
     const typed = options?.textValues?.[f.id];
+    // text and checkbox fields carry the signer's own input (free text, or
+    // "true"/"" for a checkbox); the rest derive from the adopted signature
     const value =
-      f.type === "text"
+      f.type === "text" || f.type === "checkbox"
         ? (typed ?? f.value ?? "")
         : fieldValueFor(f.type, adopted, dateStamp);
     await db.update(field).set({ value }).where(eq(field.id, f.id));
