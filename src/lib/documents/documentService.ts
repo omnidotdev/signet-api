@@ -1964,15 +1964,21 @@ export const signByToken = async (
   for (const f of myFields) {
     const typed = options?.textValues?.[f.id];
     // text, checkbox, dropdown and radio fields carry the signer's own input
-    // (free text, "true"/"" for a checkbox, or the chosen option); the rest
-    // derive from the adopted signature
-    const value =
+    // (free text, "true"/"" for a checkbox, or the chosen option); a date is
+    // editable but defaults to today; the rest derive from the adopted signature
+    let value: string;
+    if (f.type === "date") {
+      value = typed ?? f.value ?? dateStamp;
+    } else if (
       f.type === "text" ||
       f.type === "checkbox" ||
       f.type === "dropdown" ||
       f.type === "radio"
-        ? (typed ?? f.value ?? "")
-        : fieldValueFor(f.type, adopted, dateStamp);
+    ) {
+      value = typed ?? f.value ?? "";
+    } else {
+      value = fieldValueFor(f.type, adopted, dateStamp);
+    }
     await db.update(field).set({ value }).where(eq(field.id, f.id));
   }
 
