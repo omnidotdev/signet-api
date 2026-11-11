@@ -10,6 +10,9 @@ const FG = "#1b1613";
 const MUTED = "#6c6158";
 const FAINT = "#9a8f85";
 const QUOTE_BG = "#faf6f3";
+// The Signet mark, hosted on the canonical production domain. Emails always
+// point at production, and email clients cannot render the app's inline SVG
+const LOGO_URL = "https://signet.omni.dev/email-logo.png";
 
 /** Escape user-supplied text before interpolating it into email HTML */
 export const escapeHtml = (value: string): string =>
@@ -27,7 +30,7 @@ export interface EmailButton {
 
 /** A soft callout block, e.g. for the reason a signer declined */
 export const emailQuote = (label: string, value: string): string => `
-      <div style="margin:18px 0 0;background:${QUOTE_BG};border:1px solid ${BORDER};border-left:3px solid ${BRAND};border-radius:10px;padding:12px 16px;font-size:14px;line-height:1.55;color:${MUTED};">
+      <div style="margin:18px 0 0;background:${QUOTE_BG};border:1px solid ${BORDER};border-radius:10px;padding:12px 16px;font-size:14px;line-height:1.55;color:${MUTED};">
         <strong style="color:${FG};">${label}</strong> ${value}
       </div>`;
 
@@ -60,7 +63,8 @@ export const emailShell = ({
 <body style="margin:0;padding:0;background:${BG};">
   <div style="max-width:540px;margin:0 auto;padding:40px 16px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
     <div style="padding:0 4px 20px;">
-      <span style="font-size:19px;font-weight:800;letter-spacing:-0.02em;color:${BRAND};">Signet</span>
+      <img src="${LOGO_URL}" width="26" height="26" alt="Signet" style="vertical-align:middle;margin-right:9px;border:0;">
+      <span style="font-size:19px;font-weight:800;letter-spacing:-0.02em;color:${BRAND};vertical-align:middle;">Signet</span>
     </div>
     <div style="background:${CARD};border:1px solid ${BORDER};border-radius:18px;padding:36px 32px;box-shadow:0 1px 2px rgba(27,22,19,0.04);">
       <h1 style="margin:0 0 14px;font-size:21px;line-height:1.3;letter-spacing:-0.02em;color:${FG};">${heading}</h1>
