@@ -49,6 +49,7 @@ import {
   createDraftFromTemplate,
   listTemplates,
   saveTemplateFromDraft,
+  saveTemplateFromOwnedDraft,
 } from "./lib/documents/templateService.ts";
 import { sendCompletionEmail } from "./lib/email/completionEmail.ts";
 import { sendSignatureRequestEmail } from "./lib/email/signatureRequestEmail.ts";
@@ -1053,6 +1054,7 @@ if (hasDb) {
           }
           return {
             ok: true,
+            draftId: draft.id,
             editUrl: `${baseUrl}/d/${draft.id}/edit?token=${draft.manageToken}`,
           };
         },
@@ -1062,7 +1064,33 @@ if (hasDb) {
             signers: t.String(),
           }),
         },
-      );
+      )
+      // list the signed-in owner's reusable templates
+      .get("/api/templates", async ({ session, set }) => {
+        if (!session) {
+          set.status = 401;
+          return { error: "unauthorized" };
+        }
+        return listTemplates(db, session.sub);
+      })
+      // save a draft the owner owns as a reusable template
+      .post("/api/documents/:id/template", async ({ params, session, set }) => {
+        if (!session) {
+          set.status = 401;
+          return { ok: false };
+        }
+        const result = await saveTemplateFromOwnedDraft(
+          db,
+          params.id,
+          session.sub,
+          (session.workspaces ?? []).map((w) => w.id),
+        );
+        if (!result) {
+          set.status = 404;
+          return { ok: false };
+        }
+        return { ok: true, templateId: result.id };
+      });
   }
 }
 
