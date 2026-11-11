@@ -1,0 +1,1 @@
+ALTER TABLE "field" ADD COLUMN "group_id" text;
