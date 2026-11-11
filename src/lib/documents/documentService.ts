@@ -1350,6 +1350,106 @@ export const updateDraftSigner = async (
   return true;
 };
 
+export interface CorrectSignerInput {
+  name?: string;
+  email?: string | null;
+}
+
+export interface CorrectedSigner {
+  id: string;
+  name: string;
+  email: string | null;
+  signToken: string;
+  documentName: string;
+  /** true when the email changed: the sign token was rotated, so the old link
+      no longer works and the caller must send the new one */
+  reissued: boolean;
+}
+
+/**
+ * Correct a still-pending signer on a sent document (owner-scoped): fix a typo
+ * in the name or reassign the email of someone who has not yet signed or
+ * declined. Changing the email rotates the signer's sign token, invalidating
+ * the old link, so the caller must email the new one. A signer who has already
+ * signed or declined is immutable, which preserves the integrity of a signature
+ * already captured. Returns null when the document is not sent, the signer is
+ * unknown, or the signer is no longer pending.
+ */
+export const correctOwnedSigner = async (
+  db: Db,
+  id: string,
+  ownerId: string,
+  workspaceIds: string[],
+  signerId: string,
+  input: CorrectSignerInput,
+): Promise<CorrectedSigner | null> => {
+  const [doc] = await db
+    .select()
+    .from(document)
+    .where(and(eq(document.id, id), ownerAccess(ownerId, workspaceIds)));
+  if (!doc || doc.status !== "sent") return null;
+
+  const [existing] = await db
+    .select()
+    .from(signer)
+    .where(and(eq(signer.id, signerId), eq(signer.documentId, id)));
+  if (!existing) return null;
+  // only someone still awaiting action can be corrected
+  if (existing.status === "signed" || existing.status === "declined")
+    return null;
+
+  const patch: { name?: string; email?: string | null; signToken?: string } =
+    {};
+
+  if (input.name !== undefined) {
+    const name = input.name.trim();
+    if (!name) return null;
+    if (name !== existing.name) patch.name = name;
+  }
+
+  let reissued = false;
+  if (input.email !== undefined) {
+    const email = input.email?.trim() || null;
+    if (email !== existing.email) {
+      patch.email = email;
+      // a changed recipient must not inherit the previous capability link
+      patch.signToken = generateToken();
+      reissued = true;
+    }
+  }
+
+  if (Object.keys(patch).length === 0) {
+    // nothing actually changed; report the signer as-is
+    return {
+      id: existing.id,
+      name: existing.name,
+      email: existing.email,
+      signToken: existing.signToken,
+      documentName: doc.name,
+      reissued: false,
+    };
+  }
+
+  const [row] = await db
+    .update(signer)
+    .set(patch)
+    .where(eq(signer.id, signerId))
+    .returning({
+      id: signer.id,
+      name: signer.name,
+      email: signer.email,
+      signToken: signer.signToken,
+    });
+  if (!row) throw new Error("failed to correct signer");
+
+  await appendProvenance(db, id, {
+    type: "signer.corrected",
+    data: { signer: row.name, reissued },
+  });
+
+  return { ...row, documentName: doc.name, reissued };
+};
+
 export interface SignerView {
   documentId: string;
   documentName: string;

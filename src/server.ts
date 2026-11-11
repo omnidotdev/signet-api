@@ -20,6 +20,7 @@ import {
   addSignerToDraft,
   buildCertificateForOwner,
   buildCertificateForToken,
+  correctOwnedSigner,
   createDraft,
   createMultiSignerRequest,
   declineByToken,
@@ -702,6 +703,60 @@ if (hasDb) {
           });
         }
         return { ok: true, reminded: result.signers.length };
+      },
+    )
+    // correct a still-pending signer on a sent document (owner-scoped): fix a
+    // name or reassign the email. Changing the email rotates the signing link
+    // and re-sends it; signed or declined signers cannot be changed
+    .post(
+      "/api/documents/:id/signers/:signerId",
+      async ({ params, body, session, set }) => {
+        if (!session) {
+          set.status = 401;
+          return { ok: false };
+        }
+        const input =
+          body && typeof body === "object"
+            ? (body as { name?: unknown; email?: unknown })
+            : {};
+        const result = await correctOwnedSigner(
+          db,
+          params.id,
+          session.sub,
+          (session.workspaces ?? []).map((w) => w.id),
+          params.signerId,
+          {
+            name: typeof input.name === "string" ? input.name : undefined,
+            email:
+              input.email === null
+                ? null
+                : typeof input.email === "string"
+                  ? input.email
+                  : undefined,
+          },
+        );
+        if (!result) {
+          set.status = 404;
+          return { ok: false };
+        }
+        // a reissued link invalidates the old email, so send the fresh one
+        if (result.reissued && result.email) {
+          void sendSignatureRequestEmail({
+            to: result.email,
+            signerName: result.name,
+            documentName: result.documentName,
+            signUrl: `${appBaseUrl}/sign/${result.signToken}`,
+          });
+        }
+        return {
+          ok: true,
+          signer: {
+            id: result.id,
+            name: result.name,
+            email: result.email,
+            reissued: result.reissued,
+          },
+        };
       },
     )
     // editor data for a draft the signed-in owner owns
