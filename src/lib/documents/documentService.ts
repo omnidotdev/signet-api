@@ -2045,6 +2045,64 @@ export const getSignedPdfForOwner = async (
   return loadPdf(doc.signedPdf ?? "", doc.signedPdfKey);
 };
 
+export interface DeclineResult {
+  ok: boolean;
+  error?: string;
+  documentName?: string;
+  signerName?: string;
+  ownerEmail?: string | null;
+}
+
+/**
+ * A signer declines to sign: mark them declined and void the whole document so
+ * no one can sign it further, recording the decline (and any reason) in the
+ * provenance ledger. Enforces the signer's access code, like signing.
+ */
+export const declineByToken = async (
+  db: Db,
+  signToken: string,
+  reason?: string,
+  accessCode?: string,
+): Promise<DeclineResult> => {
+  const [sgn] = await db
+    .select()
+    .from(signer)
+    .where(eq(signer.signToken, signToken));
+  if (!sgn) return { ok: false, error: "not_found" };
+  if (sgn.status === "signed") return { ok: false, error: "already_signed" };
+  if (sgn.accessCode && (accessCode ?? "").trim() !== sgn.accessCode)
+    return { ok: false, error: "locked" };
+
+  const [doc] = await db
+    .select()
+    .from(document)
+    .where(eq(document.id, sgn.documentId));
+  if (!doc) return { ok: false, error: "not_found" };
+  if (doc.status === "completed")
+    return { ok: false, error: "already_completed" };
+  if (doc.status === "voided") return { ok: false, error: "voided" };
+
+  await db
+    .update(signer)
+    .set({ status: "declined" })
+    .where(eq(signer.id, sgn.id));
+  await db
+    .update(document)
+    .set({ status: "voided", updatedAt: new Date() })
+    .where(eq(document.id, doc.id));
+  await appendProvenance(db, doc.id, {
+    type: "document.declined",
+    data: { signer: sgn.name, reason: reason?.trim() || null },
+  });
+  emitDocumentVoided({ documentId: doc.id, ownerId: doc.ownerId });
+  return {
+    ok: true,
+    documentName: doc.name,
+    signerName: sgn.name,
+    ownerEmail: doc.ownerEmail,
+  };
+};
+
 /** Void a document so it can no longer be signed */
 export const voidDocument = async (
   db: Db,

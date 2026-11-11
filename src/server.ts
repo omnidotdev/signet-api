@@ -22,6 +22,7 @@ import {
   buildCertificateForToken,
   createDraft,
   createMultiSignerRequest,
+  declineByToken,
   deleteOwnedDocument,
   getDocumentDetailForOwner,
   getDocumentFileForOwner,
@@ -52,6 +53,7 @@ import {
   saveTemplateFromOwnedDraft,
 } from "./lib/documents/templateService.ts";
 import { sendCompletionEmail } from "./lib/email/completionEmail.ts";
+import { sendDeclineEmail } from "./lib/email/declineEmail.ts";
 import { sendSignatureRequestEmail } from "./lib/email/signatureRequestEmail.ts";
 import { runReminders } from "./lib/reminders/reminderJob.ts";
 import { signPdf } from "./lib/signing/pdfSigner.ts";
@@ -892,6 +894,45 @@ if (hasDb) {
             signatureImage: t.Optional(t.Union([t.String(), t.Null()])),
             textValues: t.Optional(t.Record(t.String(), t.String())),
             consent: t.Optional(t.Boolean()),
+            accessCode: t.Optional(t.String()),
+          }),
+        ),
+      },
+    )
+    // a signer declines to sign, voiding the document for everyone
+    .post(
+      "/sign/:token/decline",
+      async ({ params, body, set }) => {
+        const result = await declineByToken(
+          db,
+          params.token,
+          body?.reason,
+          body?.accessCode,
+        );
+        if (!result.ok) {
+          set.status =
+            result.error === "not_found"
+              ? 404
+              : result.error === "locked"
+                ? 401
+                : 409;
+          return { ok: false, error: result.error };
+        }
+        if (result.ownerEmail) {
+          void sendDeclineEmail({
+            to: result.ownerEmail,
+            documentName: result.documentName ?? "your document",
+            signerName: result.signerName ?? "A signer",
+            reason: body?.reason ?? null,
+            manageUrl: `${appBaseUrl}/documents`,
+          });
+        }
+        return { ok: true };
+      },
+      {
+        body: t.Optional(
+          t.Object({
+            reason: t.Optional(t.String()),
             accessCode: t.Optional(t.String()),
           }),
         ),
