@@ -101,7 +101,12 @@ export const stampFields = async (
     const text = field.value;
     if (!text) continue;
     const font =
-      field.type === "date" || field.type === "text" ? plain : script;
+      field.type === "date" ||
+      field.type === "text" ||
+      field.type === "dropdown" ||
+      field.type === "radio"
+        ? plain
+        : script;
     let size = Math.min(field.height, 14);
     while (size > 6 && font.widthOfTextAtSize(text, size) > field.width) {
       size -= 0.5;

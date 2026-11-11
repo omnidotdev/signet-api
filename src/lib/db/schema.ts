@@ -98,8 +98,10 @@ export const field = pgTable("field", {
   signerId: uuid("signer_id").references(() => signer.id, {
     onDelete: "set null",
   }),
-  /** signature | date | initials | text */
+  /** signature | date | initials | text | checkbox | dropdown | radio */
   type: text("type").notNull(),
+  /** choices for a dropdown or radio field, as a JSON array of strings */
+  options: text("options"),
   /** 1-based page number */
   page: integer("page").notNull(),
   x: doublePrecision("x").notNull(),

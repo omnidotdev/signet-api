@@ -939,7 +939,28 @@ export interface EditorField {
   y: number;
   width: number;
   height: number;
+  /** choices for a dropdown or radio field */
+  options?: string[] | null;
 }
+
+/** Parse the stored options JSON (a dropdown/radio field's choices) */
+export const parseFieldOptions = (raw: string | null): string[] | null => {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed)
+      ? parsed.filter((o): o is string => typeof o === "string")
+      : null;
+  } catch {
+    return null;
+  }
+};
+
+/** Serialize a field's options to JSON for storage, or null when there are none */
+const serializeFieldOptions = (
+  options: string[] | null | undefined,
+): string | null =>
+  options && options.length > 0 ? JSON.stringify(options) : null;
 
 export interface EditorData {
   id: string;
@@ -1001,6 +1022,7 @@ export const getEditorData = async (
       y: f.y,
       width: f.width,
       height: f.height,
+      options: parseFieldOptions(f.options),
     })),
   };
 };
@@ -1038,6 +1060,7 @@ export const saveFields = async (
         width: f.width,
         height: f.height,
         source: "manual",
+        options: serializeFieldOptions(f.options),
       })),
     );
   }
@@ -1092,6 +1115,7 @@ export const getEditorDataForOwner = async (
       y: f.y,
       width: f.width,
       height: f.height,
+      options: parseFieldOptions(f.options),
     })),
   };
 };
@@ -1134,6 +1158,7 @@ export const saveFieldsForOwner = async (
         width: f.width,
         height: f.height,
         source: "manual",
+        options: serializeFieldOptions(f.options),
       })),
     );
   }
@@ -1604,6 +1629,8 @@ export interface SignerFillField {
   y: number;
   width: number;
   height: number;
+  /** choices for a dropdown or radio field */
+  options?: string[] | null;
 }
 
 export interface SignerFillData {
@@ -1706,7 +1733,7 @@ export const getSignerFillData = async (
     });
   }
 
-  const fields = await db
+  const fieldRows = await db
     .select({
       id: field.id,
       type: field.type,
@@ -1715,9 +1742,14 @@ export const getSignerFillData = async (
       y: field.y,
       width: field.width,
       height: field.height,
+      options: field.options,
     })
     .from(field)
     .where(eq(field.signerId, row.signerId));
+  const fields = fieldRows.map((f) => ({
+    ...f,
+    options: parseFieldOptions(f.options),
+  }));
   const pdfBase64 = toBase64(
     await loadPdf(row.originalPdf, row.originalPdfKey),
   );
@@ -1829,10 +1861,14 @@ export const signByToken = async (
     .where(and(eq(field.documentId, doc.id), eq(field.signerId, sgn.id)));
   for (const f of myFields) {
     const typed = options?.textValues?.[f.id];
-    // text and checkbox fields carry the signer's own input (free text, or
-    // "true"/"" for a checkbox); the rest derive from the adopted signature
+    // text, checkbox, dropdown and radio fields carry the signer's own input
+    // (free text, "true"/"" for a checkbox, or the chosen option); the rest
+    // derive from the adopted signature
     const value =
-      f.type === "text" || f.type === "checkbox"
+      f.type === "text" ||
+      f.type === "checkbox" ||
+      f.type === "dropdown" ||
+      f.type === "radio"
         ? (typed ?? f.value ?? "")
         : fieldValueFor(f.type, adopted, dateStamp);
     await db.update(field).set({ value }).where(eq(field.id, f.id));
