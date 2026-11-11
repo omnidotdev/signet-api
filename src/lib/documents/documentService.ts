@@ -941,6 +941,8 @@ export interface EditorField {
   height: number;
   /** choices for a dropdown or radio field */
   options?: string[] | null;
+  /** whether the signer must fill this field before submitting */
+  required?: boolean;
 }
 
 /** Parse the stored options JSON (a dropdown/radio field's choices) */
@@ -1023,6 +1025,7 @@ export const getEditorData = async (
       width: f.width,
       height: f.height,
       options: parseFieldOptions(f.options),
+      required: f.required,
     })),
   };
 };
@@ -1061,6 +1064,7 @@ export const saveFields = async (
         height: f.height,
         source: "manual",
         options: serializeFieldOptions(f.options),
+        required: f.required ?? true,
       })),
     );
   }
@@ -1116,6 +1120,7 @@ export const getEditorDataForOwner = async (
       width: f.width,
       height: f.height,
       options: parseFieldOptions(f.options),
+      required: f.required,
     })),
   };
 };
@@ -1159,6 +1164,7 @@ export const saveFieldsForOwner = async (
         height: f.height,
         source: "manual",
         options: serializeFieldOptions(f.options),
+        required: f.required ?? true,
       })),
     );
   }
@@ -1696,6 +1702,8 @@ export interface SignerFillField {
   height: number;
   /** choices for a dropdown or radio field */
   options?: string[] | null;
+  /** whether the signer must fill this field before submitting */
+  required?: boolean;
 }
 
 export interface SignerFillData {
@@ -1811,6 +1819,7 @@ export const getSignerFillData = async (
       width: field.width,
       height: field.height,
       options: field.options,
+      required: field.required,
     })
     .from(field)
     .where(eq(field.signerId, row.signerId));
@@ -1928,6 +1937,21 @@ export const signByToken = async (
     .select()
     .from(field)
     .where(and(eq(field.documentId, doc.id), eq(field.signerId, sgn.id)));
+
+  // a required field must be filled before the signature is accepted. Signature
+  // and initials are satisfied by the adopted signature; a date fills itself
+  const hasAdopted = Boolean(adopted || options?.signatureImage);
+  const missingRequired = myFields.some((f) => {
+    if (!f.required) return false;
+    const typed = options?.textValues?.[f.id];
+    if (f.type === "checkbox") return (typed ?? f.value) !== "true";
+    if (f.type === "text" || f.type === "dropdown" || f.type === "radio")
+      return !(typed ?? f.value ?? "").trim();
+    if (f.type === "signature" || f.type === "initials") return !hasAdopted;
+    return false;
+  });
+  if (missingRequired) return { ok: false, error: "missing_required" };
+
   for (const f of myFields) {
     const typed = options?.textValues?.[f.id];
     // text, checkbox, dropdown and radio fields carry the signer's own input

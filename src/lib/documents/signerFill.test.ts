@@ -89,6 +89,59 @@ describe("signer fill overlay", () => {
     ]);
   });
 
+  test("enforces a required field before accepting the signature", async () => {
+    const draft = await createDraft(db, {
+      name: "Contract",
+      pdf: await blankPdf(),
+      signers: [{ name: "Ada" }],
+    });
+    const data = await import("./documentService.ts").then((m) =>
+      m.getEditorData(db, draft.id, draft.manageToken),
+    );
+    const signerId = data?.signers[0]?.id ?? null;
+    await saveFields(db, draft.id, draft.manageToken, [
+      {
+        signerId,
+        type: "signature",
+        page: 1,
+        x: 100,
+        y: 400,
+        width: 160,
+        height: 20,
+        required: true,
+      },
+      {
+        signerId,
+        type: "text",
+        page: 1,
+        x: 100,
+        y: 350,
+        width: 200,
+        height: 18,
+        required: true,
+      },
+    ]);
+    const sent = await sendDraft(db, draft.id, draft.manageToken);
+    const token = sent?.signers[0]?.signToken as string;
+
+    // signing with the required text field empty is refused
+    const blocked = await signByToken(db, serviceSigner, token, "Ada", {
+      textValues: {},
+      consent: true,
+    });
+    expect(blocked.ok).toBe(false);
+    expect(blocked.error).toBe("missing_required");
+
+    // filling it lets the signature through
+    const fill = await getSignerFillData(db, token);
+    const textField = fill?.fields.find((f) => f.type === "text");
+    const ok = await signByToken(db, serviceSigner, token, "Ada", {
+      textValues: { [textField?.id as string]: "Acme Inc" },
+      consent: true,
+    });
+    expect(ok.ok).toBe(true);
+  });
+
   test("stamps a drawn signature and a typed text field, then seals", async () => {
     const draft = await createDraft(db, {
       name: "Contract",
