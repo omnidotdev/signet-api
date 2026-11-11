@@ -115,11 +115,15 @@ if (!authEnabled) {
 
 const html = (markup: string) =>
   new Response(markup, { headers: { "content-type": "text/html" } });
-const pdfResponse = (bytes: Uint8Array, filename: string) =>
+const pdfResponse = (
+  bytes: Uint8Array,
+  filename: string,
+  disposition: "attachment" | "inline" = "attachment",
+) =>
   new Response(bytes, {
     headers: {
       "content-type": "application/pdf",
-      "content-disposition": `attachment; filename="${filename}"`,
+      "content-disposition": `${disposition}; filename="${filename}"`,
     },
   });
 
@@ -460,7 +464,7 @@ if (hasDb) {
     })
     // the document file (signed if sealed, else the original) for the owner, so
     // a sender can open any document from their history at any stage
-    .get("/api/documents/:id/file", async ({ params, session, set }) => {
+    .get("/api/documents/:id/file", async ({ params, session, set, query }) => {
       if (!session) {
         set.status = 401;
         return { error: "unauthorized" };
@@ -475,9 +479,11 @@ if (hasDb) {
         set.status = 404;
         return { error: "not_found" };
       }
+      // Default to a download; an embedded in-app viewer requests ?disposition=inline
       return pdfResponse(
         file.bytes,
         file.signed ? "signed.pdf" : "document.pdf",
+        query.disposition === "inline" ? "inline" : "attachment",
       );
     })
     // the Certificate of Completion PDF for a completed document (owner-scoped)
