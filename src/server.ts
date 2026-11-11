@@ -46,6 +46,7 @@ import {
   verifySignerAccess,
   voidDocument,
 } from "./lib/documents/documentService.ts";
+import { resolveMySignToken } from "./lib/documents/signAsMe.ts";
 import {
   createDraftFromTemplate,
   listTemplates,
@@ -56,6 +57,10 @@ import { sendCompletionEmail } from "./lib/email/completionEmail.ts";
 import { sendDeclineEmail } from "./lib/email/declineEmail.ts";
 import { sendSignatureRequestEmail } from "./lib/email/signatureRequestEmail.ts";
 import { runReminders } from "./lib/reminders/reminderJob.ts";
+import {
+  getUserSignature,
+  saveUserSignature,
+} from "./lib/signatures/userSignature.ts";
 import { signPdf } from "./lib/signing/pdfSigner.ts";
 import { loadServiceSigner } from "./lib/signing/signerIdentity.ts";
 import { pdfStorageEnabled } from "./lib/storage/pdfStore.ts";
@@ -126,6 +131,60 @@ const pdfResponse = (
       "content-disposition": `${disposition}; filename="${filename}"`,
     },
   });
+
+/**
+ * Side-effect emails after a signature lands: hand off to the next signer in a
+ * sequential flow, and on completion tell every party (and the sender) the
+ * document is finished. Shared by the token signer flow and the in-app sign
+ * flow so both behave identically.
+ */
+const notifyAfterSign = (result: Awaited<ReturnType<typeof signByToken>>) => {
+  if (!result.ok) return;
+  if (result.notifySigner?.email) {
+    void sendSignatureRequestEmail({
+      to: result.notifySigner.email,
+      signerName: result.notifySigner.name,
+      documentName: result.notifySigner.documentName,
+      signUrl: `${appBaseUrl}/sign/${result.notifySigner.signToken}`,
+    });
+  }
+  if (result.completion) {
+    const { documentName, ownerEmail, signers } = result.completion;
+    for (const s of signers) {
+      if (!s.email) continue;
+      void sendCompletionEmail({
+        to: s.email,
+        recipientName: s.name,
+        documentName,
+        downloadUrl: `${appBaseUrl}/sign/${s.signToken}`,
+      });
+    }
+    // the sender, when they are not themselves a signer we already emailed
+    if (ownerEmail && !signers.some((s) => s.email === ownerEmail)) {
+      void sendCompletionEmail({
+        to: ownerEmail,
+        recipientName: "there",
+        documentName,
+        downloadUrl: `${appBaseUrl}/documents`,
+      });
+    }
+  }
+};
+
+/** Notify the sender when a signer declines, shared by both decline flows */
+const notifyAfterDecline = (
+  result: Awaited<ReturnType<typeof declineByToken>>,
+  reason: string | null,
+) => {
+  if (!result.ok || !result.ownerEmail) return;
+  void sendDeclineEmail({
+    to: result.ownerEmail,
+    documentName: result.documentName ?? "your document",
+    signerName: result.signerName ?? "A signer",
+    reason,
+    manageUrl: `${appBaseUrl}/documents`,
+  });
+};
 
 const SERVICE_KEY = process.env.SIGNET_SERVICE_KEY;
 
@@ -486,6 +545,113 @@ if (hasDb) {
         query.disposition === "inline" ? "inline" : "attachment",
       );
     })
+    // in-app signing for a signed-in user who is also a signer on this document:
+    // resolve their signer by email and reuse the token-based signing flow, so
+    // the sender can sign their own document without the emailed capability link
+    .get("/api/documents/:id/sign-as-me", async ({ params, session, set }) => {
+      if (!session) {
+        set.status = 401;
+        return { error: "unauthorized" };
+      }
+      const token = await resolveMySignToken(db, params.id, session.email);
+      if (!token) {
+        set.status = 404;
+        return { error: "not_found" };
+      }
+      const data = await getSignerFillData(db, token);
+      if (!data) {
+        set.status = 404;
+        return { error: "not_found" };
+      }
+      return data;
+    })
+    .post(
+      "/api/documents/:id/sign-as-me",
+      async ({ params, session, body, set }) => {
+        if (!session) {
+          set.status = 401;
+          return { ok: false, error: "unauthorized" };
+        }
+        const token = await resolveMySignToken(db, params.id, session.email);
+        if (!token) {
+          set.status = 404;
+          return { ok: false, error: "not_found" };
+        }
+        const result = await signByToken(db, signer, token, body?.signature, {
+          signatureImage: body?.signatureImage ?? null,
+          textValues: body?.textValues ?? {},
+          consent: body?.consent ?? false,
+        });
+        if (!result.ok) {
+          set.status = result.error === "not_found" ? 404 : 409;
+          return { ok: false, error: result.error };
+        }
+        notifyAfterSign(result);
+        return { ok: true, completed: result.completed };
+      },
+      {
+        body: t.Optional(
+          t.Object({
+            signature: t.Optional(t.String()),
+            signatureImage: t.Optional(t.Union([t.String(), t.Null()])),
+            textValues: t.Optional(t.Record(t.String(), t.String())),
+            consent: t.Optional(t.Boolean()),
+          }),
+        ),
+      },
+    )
+    .post(
+      "/api/documents/:id/sign-as-me/decline",
+      async ({ params, session, body, set }) => {
+        if (!session) {
+          set.status = 401;
+          return { ok: false, error: "unauthorized" };
+        }
+        const token = await resolveMySignToken(db, params.id, session.email);
+        if (!token) {
+          set.status = 404;
+          return { ok: false, error: "not_found" };
+        }
+        const result = await declineByToken(db, token, body?.reason);
+        if (!result.ok) {
+          set.status = result.error === "not_found" ? 404 : 409;
+          return { ok: false, error: result.error };
+        }
+        notifyAfterDecline(result, body?.reason ?? null);
+        return { ok: true };
+      },
+      { body: t.Optional(t.Object({ reason: t.Optional(t.String()) })) },
+    )
+    // the signed-in user's saved signature, reused across their documents and devices
+    .get("/api/me/signature", async ({ session, set }) => {
+      if (!session) {
+        set.status = 401;
+        return { error: "unauthorized" };
+      }
+      return { signature: await getUserSignature(db, session.sub) };
+    })
+    .put(
+      "/api/me/signature",
+      async ({ session, body, set }) => {
+        if (!session) {
+          set.status = 401;
+          return { ok: false, error: "unauthorized" };
+        }
+        await saveUserSignature(db, session.sub, {
+          typedName: body.typedName ?? null,
+          image: body.image ?? null,
+          mode: body.mode,
+        });
+        return { ok: true };
+      },
+      {
+        body: t.Object({
+          typedName: t.Optional(t.Union([t.String(), t.Null()])),
+          image: t.Optional(t.Union([t.String(), t.Null()])),
+          mode: t.String(),
+        }),
+      },
+    )
     // the Certificate of Completion PDF for a completed document (owner-scoped)
     .get("/api/documents/:id/certificate", async ({ params, session, set }) => {
       if (!session) {
@@ -859,38 +1025,7 @@ if (hasDb) {
                 : 409;
           return { ok: false, error: result.error };
         }
-        // sequential routing: hand off to the next signer by email
-        if (result.notifySigner?.email) {
-          void sendSignatureRequestEmail({
-            to: result.notifySigner.email,
-            signerName: result.notifySigner.name,
-            documentName: result.notifySigner.documentName,
-            signUrl: `${appBaseUrl}/sign/${result.notifySigner.signToken}`,
-          });
-        }
-        // on completion, tell every party the document is signed, each with a
-        // link to view and download the finished document
-        if (result.completion) {
-          const { documentName, ownerEmail, signers } = result.completion;
-          for (const s of signers) {
-            if (!s.email) continue;
-            void sendCompletionEmail({
-              to: s.email,
-              recipientName: s.name,
-              documentName,
-              downloadUrl: `${appBaseUrl}/sign/${s.signToken}`,
-            });
-          }
-          // the sender, when they are not themselves a signer we already emailed
-          if (ownerEmail && !signers.some((s) => s.email === ownerEmail)) {
-            void sendCompletionEmail({
-              to: ownerEmail,
-              recipientName: "there",
-              documentName,
-              downloadUrl: `${appBaseUrl}/documents`,
-            });
-          }
-        }
+        notifyAfterSign(result);
         return { ok: true, completed: result.completed };
       },
       {
@@ -924,15 +1059,7 @@ if (hasDb) {
                 : 409;
           return { ok: false, error: result.error };
         }
-        if (result.ownerEmail) {
-          void sendDeclineEmail({
-            to: result.ownerEmail,
-            documentName: result.documentName ?? "your document",
-            signerName: result.signerName ?? "A signer",
-            reason: body?.reason ?? null,
-            manageUrl: `${appBaseUrl}/documents`,
-          });
-        }
+        notifyAfterDecline(result, body?.reason ?? null);
         return { ok: true };
       },
       {

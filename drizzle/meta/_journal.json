@@ -78,6 +78,13 @@
       "when": 1794358291409,
       "tag": "0010_magenta_betty_ross",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1794369437183,
+      "tag": "0011_red_paper_doll",
+      "breakpoints": true
     }
   ]
 }

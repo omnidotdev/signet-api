@@ -138,8 +138,24 @@ export const template = pgTable("template", {
     .defaultNow(),
 });
 
+/** A signed-in user's adopted signature, reused across their documents and devices */
+export const userSignature = pgTable("user_signature", {
+  /** Gatekeeper subject of the user; one saved signature per account */
+  ownerId: text("owner_id").primaryKey(),
+  /** the typed full name, when the user adopted a typed signature */
+  typedName: text("typed_name"),
+  /** base64 PNG of a drawn or uploaded signature */
+  image: text("image"),
+  /** type | draw | upload: how the signature was adopted, to restore the editor */
+  mode: text("mode").notNull().default("type"),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
+
 export type Document = typeof document.$inferSelect;
 export type Field = typeof field.$inferSelect;
 export type Signer = typeof signer.$inferSelect;
 export type SignatureEventRow = typeof signatureEvent.$inferSelect;
 export type Template = typeof template.$inferSelect;
+export type UserSignature = typeof userSignature.$inferSelect;
