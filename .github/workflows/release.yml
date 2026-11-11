@@ -1,0 +1,43 @@
+name: Release 🏗️
+
+# signet-api is a private, deployed service, not an npm package, so
+# `changeset publish` only creates a git tag (privatePackages.tag in
+# .changeset/config.json) and never touches npm; no registry auth is needed.
+# On push to master, Changesets opens a "version packages" PR that bumps the
+# version and CHANGELOG from the accumulated changesets, and merging that PR
+# tags the release.
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+concurrency: ${{ github.workflow }}-${{ github.ref }}
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release:
+    name: Handle release 🦋
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          # pin Bun so the toolchain does not drift with floating latest
+          bun-version: 1.4.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Create release PR or tag package
+        uses: changesets/action@v2
+        with:
+          version: bunx changeset version
+          publish: bun run release
+          title: "feature(release): version packages"
+          commit: "ci(changesets): version packages"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
