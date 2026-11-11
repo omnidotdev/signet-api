@@ -1,0 +1,1 @@
+ALTER TABLE "field" ADD COLUMN "options" text;

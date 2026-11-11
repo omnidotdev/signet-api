@@ -185,6 +185,23 @@ describe("field stamping", () => {
     // no value means nothing to draw, so the original PDF is returned unchanged
     expect(stamped).toBe(pdf);
   });
+
+  test("draws the chosen option for a dropdown field", async () => {
+    const pdf = await anchorPdf();
+    const stamped = await stampFields(pdf, [
+      {
+        type: "dropdown",
+        page: 1,
+        x: 120,
+        y: 200,
+        width: 140,
+        height: 16,
+        value: "Net 30",
+      },
+    ]);
+    const text = await extractText(stamped);
+    expect(text).toContain("Net 30");
+  });
 });
 
 describe("initials", () => {
