@@ -17,6 +17,7 @@ import {
 import { getDb, runMigrations } from "./lib/db/client.ts";
 import type { EditorField } from "./lib/documents/documentService.ts";
 import {
+  addSignerForOwner,
   addSignerToDraft,
   buildCertificateForOwner,
   buildCertificateForToken,
@@ -36,6 +37,7 @@ import {
   getStatus,
   listWorkspaceDocuments,
   remindOwnedDocument,
+  removeSignerForOwner,
   removeSignerFromDraft,
   renameOwnedDocument,
   saveFields,
@@ -44,6 +46,7 @@ import {
   sendOwnedDraft,
   signByToken,
   updateDraftSigner,
+  updateSignerForOwner,
   verifySignerAccess,
   voidDocument,
 } from "./lib/documents/documentService.ts";
@@ -757,6 +760,80 @@ if (hasDb) {
             reissued: result.reissued,
           },
         };
+      },
+    )
+    // add a signer to a draft the owner owns (owner-scoped, draft only)
+    .post(
+      "/api/documents/:id/signers",
+      async ({ params, body, session, set }) => {
+        if (!session) {
+          set.status = 401;
+          return { ok: false };
+        }
+        const added = await addSignerForOwner(
+          db,
+          params.id,
+          session.sub,
+          (session.workspaces ?? []).map((w) => w.id),
+          { name: body.name, email: body.email },
+        );
+        if (!added) {
+          set.status = 400;
+          return { ok: false };
+        }
+        return { ok: true, signer: added };
+      },
+      { body: t.Object({ name: t.String(), email: t.Optional(t.String()) }) },
+    )
+    // edit a signer on a draft the owner owns (owner-scoped, draft only)
+    .patch(
+      "/api/documents/:id/signers/:signerId",
+      async ({ params, body, session, set }) => {
+        if (!session) {
+          set.status = 401;
+          return { ok: false };
+        }
+        const ok = await updateSignerForOwner(
+          db,
+          params.id,
+          session.sub,
+          (session.workspaces ?? []).map((w) => w.id),
+          params.signerId,
+          { name: body.name, email: body.email },
+        );
+        if (!ok) {
+          set.status = 400;
+          return { ok: false };
+        }
+        return { ok: true };
+      },
+      {
+        body: t.Object({
+          name: t.Optional(t.String()),
+          email: t.Optional(t.String()),
+        }),
+      },
+    )
+    // remove a signer from a draft the owner owns (never the last one)
+    .delete(
+      "/api/documents/:id/signers/:signerId",
+      async ({ params, session, set }) => {
+        if (!session) {
+          set.status = 401;
+          return { ok: false };
+        }
+        const ok = await removeSignerForOwner(
+          db,
+          params.id,
+          session.sub,
+          (session.workspaces ?? []).map((w) => w.id),
+          params.signerId,
+        );
+        if (!ok) {
+          set.status = 400;
+          return { ok: false };
+        }
+        return { ok: true };
       },
     )
     // editor data for a draft the signed-in owner owns

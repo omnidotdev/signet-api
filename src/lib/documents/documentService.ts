@@ -1223,6 +1223,25 @@ const loadDraftForManage = async (
   return doc;
 };
 
+/**
+ * Load a draft by id scoped to the signed-in owner (or one of their
+ * workspaces), the owner-session counterpart to loadDraftForManage. Signers can
+ * still be changed only while the document is a draft.
+ */
+const loadDraftForOwner = async (
+  db: Db,
+  id: string,
+  ownerId: string,
+  workspaceIds: string[],
+): Promise<{ id: string; status: string } | null> => {
+  const [doc] = await db
+    .select({ id: document.id, status: document.status })
+    .from(document)
+    .where(and(eq(document.id, id), ownerAccess(ownerId, workspaceIds)));
+  if (!doc || doc.status !== "draft") return null;
+  return doc;
+};
+
 export interface AddedSigner {
   id: string;
   name: string;
@@ -1231,15 +1250,13 @@ export interface AddedSigner {
   signToken: string;
 }
 
-/** Add a signer to a draft (draft only). Returns the new signer, or null */
-export const addSignerToDraft = async (
+/** Add a signer to a verified draft (shared by the manage-token and owner
+    entry points). Returns the new signer, or null for a blank name. */
+const insertDraftSigner = async (
   db: Db,
   id: string,
-  manageToken: string,
   input: DraftSignerInput,
 ): Promise<AddedSigner | null> => {
-  const doc = await loadDraftForManage(db, id, manageToken);
-  if (!doc) return null;
   const name = input.name?.trim();
   if (!name) return null;
 
@@ -1276,21 +1293,13 @@ export const addSignerToDraft = async (
   return { ...row, color: row.color ?? "" };
 };
 
-/**
- * Remove a signer from a draft (draft only). Deletes the signer's fields (they
- * belonged to that person) and re-normalizes the remaining order. Refuses to
- * remove the last signer. Returns false when not a draft, unknown signer, or it
- * would leave zero signers.
- */
-export const removeSignerFromDraft = async (
+/** Remove a signer from a verified draft: delete their fields, re-normalize the
+    order, and refuse to remove the last signer. Returns false if not possible. */
+const deleteDraftSigner = async (
   db: Db,
   id: string,
-  manageToken: string,
   signerId: string,
 ): Promise<boolean> => {
-  const doc = await loadDraftForManage(db, id, manageToken);
-  if (!doc) return false;
-
   const roster = await db
     .select({ id: signer.id, name: signer.name, orderIndex: signer.orderIndex })
     .from(signer)
@@ -1321,16 +1330,14 @@ export const removeSignerFromDraft = async (
   return true;
 };
 
-/** Update a draft signer's name/email (draft only). Returns false if not found */
-export const updateDraftSigner = async (
+/** Update a signer's name/email on a verified draft. Returns false if unknown
+    or the name is blanked. */
+const patchDraftSigner = async (
   db: Db,
   id: string,
-  manageToken: string,
   signerId: string,
   input: { name?: string; email?: string | null },
 ): Promise<boolean> => {
-  const doc = await loadDraftForManage(db, id, manageToken);
-  if (!doc) return false;
   const [existing] = await db
     .select({ id: signer.id })
     .from(signer)
@@ -1348,6 +1355,83 @@ export const updateDraftSigner = async (
     await db.update(signer).set(patch).where(eq(signer.id, signerId));
   }
   return true;
+};
+
+/** Add a signer to a draft via manage token (draft only). */
+export const addSignerToDraft = async (
+  db: Db,
+  id: string,
+  manageToken: string,
+  input: DraftSignerInput,
+): Promise<AddedSigner | null> => {
+  const doc = await loadDraftForManage(db, id, manageToken);
+  if (!doc) return null;
+  return insertDraftSigner(db, id, input);
+};
+
+/** Add a signer to a draft the signed-in owner owns (draft only). */
+export const addSignerForOwner = async (
+  db: Db,
+  id: string,
+  ownerId: string,
+  workspaceIds: string[],
+  input: DraftSignerInput,
+): Promise<AddedSigner | null> => {
+  const doc = await loadDraftForOwner(db, id, ownerId, workspaceIds);
+  if (!doc) return null;
+  return insertDraftSigner(db, id, input);
+};
+
+/** Remove a signer from a draft via manage token (draft only). */
+export const removeSignerFromDraft = async (
+  db: Db,
+  id: string,
+  manageToken: string,
+  signerId: string,
+): Promise<boolean> => {
+  const doc = await loadDraftForManage(db, id, manageToken);
+  if (!doc) return false;
+  return deleteDraftSigner(db, id, signerId);
+};
+
+/** Remove a signer from a draft the signed-in owner owns (draft only). */
+export const removeSignerForOwner = async (
+  db: Db,
+  id: string,
+  ownerId: string,
+  workspaceIds: string[],
+  signerId: string,
+): Promise<boolean> => {
+  const doc = await loadDraftForOwner(db, id, ownerId, workspaceIds);
+  if (!doc) return false;
+  return deleteDraftSigner(db, id, signerId);
+};
+
+/** Update a draft signer's name/email via manage token (draft only). */
+export const updateDraftSigner = async (
+  db: Db,
+  id: string,
+  manageToken: string,
+  signerId: string,
+  input: { name?: string; email?: string | null },
+): Promise<boolean> => {
+  const doc = await loadDraftForManage(db, id, manageToken);
+  if (!doc) return false;
+  return patchDraftSigner(db, id, signerId, input);
+};
+
+/** Update a draft signer's name/email on a draft the owner owns (draft only). */
+export const updateSignerForOwner = async (
+  db: Db,
+  id: string,
+  ownerId: string,
+  workspaceIds: string[],
+  signerId: string,
+  input: { name?: string; email?: string | null },
+): Promise<boolean> => {
+  const doc = await loadDraftForOwner(db, id, ownerId, workspaceIds);
+  if (!doc) return false;
+  return patchDraftSigner(db, id, signerId, input);
 };
 
 export interface CorrectSignerInput {
