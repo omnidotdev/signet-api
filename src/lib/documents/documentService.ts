@@ -1701,6 +1701,8 @@ export interface SignerFillField {
 export interface SignerFillData {
   documentName: string;
   signerName: string;
+  /** this signer's assigned color, for tinting their fields */
+  signerColor: string | null;
   alreadySigned: boolean;
   /** whether the whole document is complete (every signer done, sealed) */
   documentCompleted: boolean;
@@ -1762,6 +1764,7 @@ export const getSignerFillData = async (
       signerId: signer.id,
       signerName: signer.name,
       signerStatus: signer.status,
+      signerColor: signer.color,
       orderIndex: signer.orderIndex,
     })
     .from(signer)
@@ -1822,6 +1825,7 @@ export const getSignerFillData = async (
   return {
     documentName: row.documentName,
     signerName: row.signerName,
+    signerColor: row.signerColor,
     alreadySigned:
       row.documentStatus === "completed" || row.signerStatus === "signed",
     documentCompleted: row.documentStatus === "completed",
