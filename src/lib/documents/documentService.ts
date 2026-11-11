@@ -943,6 +943,8 @@ export interface EditorField {
   options?: string[] | null;
   /** whether the signer must fill this field before submitting */
   required?: boolean;
+  /** links mutually-exclusive radio buttons into one group */
+  groupId?: string | null;
 }
 
 /** Parse the stored options JSON (a dropdown/radio field's choices) */
@@ -1026,6 +1028,7 @@ export const getEditorData = async (
       height: f.height,
       options: parseFieldOptions(f.options),
       required: f.required,
+      groupId: f.groupId,
     })),
   };
 };
@@ -1065,6 +1068,7 @@ export const saveFields = async (
         source: "manual",
         options: serializeFieldOptions(f.options),
         required: f.required ?? true,
+        groupId: f.groupId ?? null,
       })),
     );
   }
@@ -1121,6 +1125,7 @@ export const getEditorDataForOwner = async (
       height: f.height,
       options: parseFieldOptions(f.options),
       required: f.required,
+      groupId: f.groupId,
     })),
   };
 };
@@ -1165,6 +1170,7 @@ export const saveFieldsForOwner = async (
         source: "manual",
         options: serializeFieldOptions(f.options),
         required: f.required ?? true,
+        groupId: f.groupId ?? null,
       })),
     );
   }
@@ -1704,6 +1710,8 @@ export interface SignerFillField {
   options?: string[] | null;
   /** whether the signer must fill this field before submitting */
   required?: boolean;
+  /** links mutually-exclusive radio buttons into one group */
+  groupId?: string | null;
 }
 
 export interface SignerFillData {
@@ -1820,6 +1828,7 @@ export const getSignerFillData = async (
       height: field.height,
       options: field.options,
       required: field.required,
+      groupId: field.groupId,
     })
     .from(field)
     .where(eq(field.signerId, row.signerId));
@@ -2018,6 +2027,7 @@ export const signByToken = async (
         height: f.height,
         value: f.value,
         image: drawn ? fromBase64(drawn) : null,
+        options: parseFieldOptions(f.options),
       };
     });
     const original = await loadPdf(doc.originalPdf, doc.originalPdfKey);

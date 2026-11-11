@@ -20,6 +20,8 @@ export interface StampField {
   value?: string | null;
   /** a drawn signature as PNG bytes, drawn in place of the text when present */
   image?: Uint8Array | null;
+  /** for a radio button, its label is options[0] */
+  options?: string[] | null;
 }
 
 /** Initials from a full name: first letter of each word, uppercased */
@@ -51,7 +53,9 @@ export const stampFields = async (
   pdf: Uint8Array,
   fields: StampField[],
 ): Promise<Uint8Array> => {
-  const toDraw = fields.filter((f) => f.value || f.image);
+  // radio buttons always draw their circle (filled or empty); everything else
+  // draws only when it has a value or image
+  const toDraw = fields.filter((f) => f.value || f.image || f.type === "radio");
   if (toDraw.length === 0) return pdf;
 
   const doc = await PDFDocument.load(pdf);
@@ -83,6 +87,36 @@ export const stampFields = async (
         thickness,
         color: ink,
       });
+      continue;
+    }
+
+    if (field.type === "radio") {
+      // a radio button: an outlined circle, filled when this option is chosen,
+      // with its label drawn beside it
+      const r = Math.min(field.height, 12) / 2;
+      const cx = field.x + r + 1;
+      const cy = field.y + field.height / 2;
+      page.drawCircle({
+        x: cx,
+        y: cy,
+        size: r,
+        borderColor: ink,
+        borderWidth: 1,
+      });
+      if (field.value) {
+        page.drawCircle({ x: cx, y: cy, size: r * 0.5, color: ink });
+      }
+      const label = field.options?.[0];
+      if (label) {
+        const size = Math.min(field.height, 11);
+        page.drawText(label, {
+          x: cx + r + 4,
+          y: cy - size * 0.35,
+          size,
+          font: plain,
+          color: ink,
+        });
+      }
       continue;
     }
 

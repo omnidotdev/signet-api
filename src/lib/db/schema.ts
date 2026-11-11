@@ -102,6 +102,8 @@ export const field = pgTable("field", {
   type: text("type").notNull(),
   /** choices for a dropdown or radio field, as a JSON array of strings */
   options: text("options"),
+  /** links the buttons of one radio group; they are mutually exclusive */
+  groupId: text("group_id"),
   /** 1-based page number */
   page: integer("page").notNull(),
   x: doublePrecision("x").notNull(),

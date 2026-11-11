@@ -186,6 +186,43 @@ describe("field stamping", () => {
     expect(stamped).toBe(pdf);
   });
 
+  test("draws a radio button with its label, filled when chosen", async () => {
+    const pdf = await anchorPdf();
+    const stamped = await stampFields(pdf, [
+      {
+        type: "radio",
+        page: 1,
+        x: 120,
+        y: 200,
+        width: 120,
+        height: 14,
+        value: "selected",
+        options: ["Agree"],
+      },
+    ]);
+    expect(stamped).not.toBe(pdf);
+    const text = await extractText(stamped);
+    expect(text).toContain("Agree");
+  });
+
+  test("draws an unchosen radio button (empty circle) too", async () => {
+    const pdf = await anchorPdf();
+    const stamped = await stampFields(pdf, [
+      {
+        type: "radio",
+        page: 1,
+        x: 120,
+        y: 200,
+        width: 120,
+        height: 14,
+        value: "",
+        options: ["Decline"],
+      },
+    ]);
+    // a radio always draws its circle even when not chosen
+    expect(stamped).not.toBe(pdf);
+  });
+
   test("draws the chosen option for a dropdown field", async () => {
     const pdf = await anchorPdf();
     const stamped = await stampFields(pdf, [
