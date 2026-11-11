@@ -466,31 +466,39 @@ if (hasDb) {
       );
     })
     // resend the signing reminder to pending signers (owner-scoped)
-    .post("/api/documents/:id/remind", async ({ params, session, set }) => {
-      if (!session) {
-        set.status = 401;
-        return { ok: false };
-      }
-      const result = await remindOwnedDocument(
-        db,
-        params.id,
-        session.sub,
-        (session.workspaces ?? []).map((w) => w.id),
-      );
-      if (!result) {
-        set.status = 404;
-        return { ok: false };
-      }
-      for (const s of result.signers) {
-        void sendSignatureRequestEmail({
-          to: s.email,
-          signerName: s.name,
-          documentName: result.documentName,
-          signUrl: `${appBaseUrl}/sign/${s.signToken}`,
-        });
-      }
-      return { ok: true, reminded: result.signers.length };
-    })
+    .post(
+      "/api/documents/:id/remind",
+      async ({ params, body, session, set }) => {
+        if (!session) {
+          set.status = 401;
+          return { ok: false };
+        }
+        const signerId =
+          body && typeof body === "object" && "signerId" in body
+            ? String((body as { signerId: unknown }).signerId)
+            : undefined;
+        const result = await remindOwnedDocument(
+          db,
+          params.id,
+          session.sub,
+          (session.workspaces ?? []).map((w) => w.id),
+          signerId,
+        );
+        if (!result) {
+          set.status = 404;
+          return { ok: false };
+        }
+        for (const s of result.signers) {
+          void sendSignatureRequestEmail({
+            to: s.email,
+            signerName: s.name,
+            documentName: result.documentName,
+            signUrl: `${appBaseUrl}/sign/${s.signToken}`,
+          });
+        }
+        return { ok: true, reminded: result.signers.length };
+      },
+    )
     // editor data for a draft the signed-in owner owns
     .get("/api/documents/:id/editor", async ({ params, session, set }) => {
       if (!session) {
@@ -784,6 +792,7 @@ if (hasDb) {
           {
             signatureImage: body?.signatureImage ?? null,
             textValues: body?.textValues ?? {},
+            consent: body?.consent ?? false,
           },
         );
         if (!result.ok) {
@@ -830,6 +839,7 @@ if (hasDb) {
             signature: t.Optional(t.String()),
             signatureImage: t.Optional(t.Union([t.String(), t.Null()])),
             textValues: t.Optional(t.Record(t.String(), t.String())),
+            consent: t.Optional(t.Boolean()),
           }),
         ),
       },
