@@ -1559,6 +1559,71 @@ export const correctOwnedSigner = async (
   return { ...row, documentName: doc.name, reissued };
 };
 
+/**
+ * Add a signer to a sent document (owner-scoped): a late party the owner needs
+ * to bring in after sending. The new signer is appended (they sign last in
+ * sequential mode) with no pre-placed fields, so they act as an approver; the
+ * caller emails them their link. Returns the new signer plus the document name,
+ * or null when the document is not sent.
+ */
+export const addSignerToSentDocument = async (
+  db: Db,
+  id: string,
+  ownerId: string,
+  workspaceIds: string[],
+  input: DraftSignerInput,
+): Promise<(AddedSigner & { documentName: string }) | null> => {
+  const [doc] = await db
+    .select()
+    .from(document)
+    .where(and(eq(document.id, id), ownerAccess(ownerId, workspaceIds)));
+  if (!doc || doc.status !== "sent") return null;
+  const added = await insertDraftSigner(db, id, input);
+  if (!added) return null;
+  return { ...added, documentName: doc.name };
+};
+
+/**
+ * Remove a still-pending signer from a sent document (owner-scoped): a party
+ * added in error. Their (unsigned) fields go with them and the order is
+ * re-normalized. A signer who has signed or declined is immutable. Refuses to
+ * remove the last signer, and refuses a removal that would leave every
+ * remaining signer already signed (which would strand the document unsealed).
+ * Returns false when any of those conditions hold.
+ */
+export const removePendingSignerFromSent = async (
+  db: Db,
+  id: string,
+  ownerId: string,
+  workspaceIds: string[],
+  signerId: string,
+): Promise<boolean> => {
+  const [doc] = await db
+    .select({ id: document.id, status: document.status })
+    .from(document)
+    .where(and(eq(document.id, id), ownerAccess(ownerId, workspaceIds)));
+  if (!doc || doc.status !== "sent") return false;
+
+  const roster = await db
+    .select({ id: signer.id, name: signer.name, status: signer.status })
+    .from(signer)
+    .where(eq(signer.documentId, id))
+    .orderBy(asc(signer.orderIndex));
+  const target = roster.find((s) => s.id === signerId);
+  if (!target) return false;
+  // a captured or refused signature is immutable
+  if (target.status === "signed" || target.status === "declined") return false;
+
+  const remaining = roster.filter((s) => s.id !== signerId);
+  if (remaining.length === 0) return false; // keep at least one signer
+  // removing this one must not leave a document whose remaining signers have
+  // all signed but which was never sealed (it would be stuck forever)
+  if (remaining.every((s) => s.status === "signed")) return false;
+
+  await deleteDraftSigner(db, id, signerId);
+  return true;
+};
+
 export interface SignerView {
   documentId: string;
   documentName: string;
