@@ -7,6 +7,7 @@ import {
   createDraftFromTemplate,
   listTemplates,
   saveTemplateFromDraft,
+  saveTemplateFromOwnedDraft,
 } from "./templateService.ts";
 
 const tinyPdf = async () => {
@@ -94,6 +95,23 @@ describe("templates", () => {
     expect(
       await saveTemplateFromDraft(db, draft.id, draft.manageToken),
     ).toBeNull();
+  });
+
+  test("saves an owned draft as a template by owner id, not manage token", async () => {
+    const draft = await createDraft(db, {
+      name: "Owner Scoped",
+      pdf: await tinyPdf(),
+      signers: [{ name: "Owner Draft" }],
+      ownerId: "owner-9",
+    });
+    // a different owner cannot save it
+    expect(
+      await saveTemplateFromOwnedDraft(db, draft.id, "someone-else", []),
+    ).toBeNull();
+    // the owner can
+    const saved = await saveTemplateFromOwnedDraft(db, draft.id, "owner-9", []);
+    expect(saved?.id).toBeString();
+    expect(await listTemplates(db, "owner-9")).toHaveLength(1);
   });
 
   test("a template is scoped to its owner", async () => {

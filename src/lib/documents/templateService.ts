@@ -3,7 +3,7 @@
  * new signing requests from. Templates are account-scoped (owner only).
  */
 
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, inArray, or } from "drizzle-orm";
 import type { Db } from "../db/client.ts";
 import type { TemplateField } from "../db/schema.ts";
 import { document, field, template } from "../db/schema.ts";
@@ -43,6 +43,56 @@ export const saveTemplateFromDraft = async (
   // first when the source document's bytes were externalized
   const pdfBytes = await loadPdf(doc.originalPdf, doc.originalPdfKey);
 
+  const [row] = await db
+    .insert(template)
+    .values({
+      name: doc.name,
+      ownerId: doc.ownerId,
+      pdfBase64: Buffer.from(pdfBytes).toString("base64"),
+      fields: layout,
+    })
+    .returning({ id: template.id });
+  if (!row) throw new Error("failed to create template");
+  return { id: row.id };
+};
+
+/**
+ * Save a template from a draft the signed-in owner owns (by owner id, or a
+ * shared workspace), for the app's owner-scoped flow. Returns null when the
+ * caller may not access the document.
+ */
+export const saveTemplateFromOwnedDraft = async (
+  db: Db,
+  docId: string,
+  ownerId: string,
+  workspaceIds: string[],
+): Promise<{ id: string } | null> => {
+  const access =
+    workspaceIds.length > 0
+      ? or(
+          eq(document.ownerId, ownerId),
+          inArray(document.organizationId, workspaceIds),
+        )
+      : eq(document.ownerId, ownerId);
+  const [doc] = await db
+    .select()
+    .from(document)
+    .where(and(eq(document.id, docId), access));
+  if (!doc?.ownerId) return null;
+
+  const fields = await db
+    .select()
+    .from(field)
+    .where(eq(field.documentId, docId));
+  const layout: TemplateField[] = fields.map((f) => ({
+    type: f.type,
+    page: f.page,
+    x: f.x,
+    y: f.y,
+    width: f.width,
+    height: f.height,
+  }));
+  const pdfBytes = await loadPdf(doc.originalPdf, doc.originalPdfKey);
   const [row] = await db
     .insert(template)
     .values({
