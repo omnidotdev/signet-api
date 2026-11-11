@@ -46,6 +46,7 @@ const EVENT_LABEL: Record<string, string> = {
   "document.signed": "Signed",
   "signature.completed": "Signed",
   "document.completed": "Completed and sealed",
+  "document.declined": "Declined",
   "document.voided": "Voided",
 };
 
