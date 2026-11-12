@@ -19,7 +19,7 @@ describe("RFC 3161 timestamping", () => {
     expect(asn1.type).toBe(forge.asn1.Type.SEQUENCE);
     const value = asn1.value as forge.asn1.Asn1[];
     // version INTEGER = 1
-    expect((value[0]?.value as string).charCodeAt(0)).toBe(1);
+    expect((value[0]!.value as string).charCodeAt(0)).toBe(1);
     // messageImprint ::= SEQUENCE { algId, hashedMessage OCTET STRING }
     const imprint = value[1]?.value as forge.asn1.Asn1[];
     const hashed = imprint[1]?.value as string;

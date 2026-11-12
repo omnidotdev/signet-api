@@ -417,7 +417,7 @@ export const sendOwnedDraft = async (
     })
     .from(document)
     .where(and(eq(document.id, id), or(...access)));
-  if (!doc || doc.status !== "draft") return null;
+  if (doc?.status !== "draft") return null;
 
   const now = new Date();
   await db
@@ -678,7 +678,7 @@ export const buildCertificateForOwner = async (
     .select()
     .from(document)
     .where(and(eq(document.id, id), ownerAccess(ownerId, workspaceIds)));
-  if (!doc || doc.status !== "completed") return null;
+  if (doc?.status !== "completed") return null;
   const signers = await db
     .select()
     .from(signer)
@@ -705,7 +705,7 @@ export const buildCertificateForToken = async (
     .select()
     .from(document)
     .where(eq(document.id, sgn.documentId));
-  if (!doc || doc.status !== "completed") return null;
+  if (doc?.status !== "completed") return null;
   const signers = await db
     .select()
     .from(signer)
@@ -736,7 +736,7 @@ export const remindOwnedDocument = async (
     .select()
     .from(document)
     .where(and(eq(document.id, id), ownerAccess(ownerId, workspaceIds)));
-  if (!doc || doc.status !== "sent") return null;
+  if (doc?.status !== "sent") return null;
 
   const signers = await db
     .select()
@@ -1061,7 +1061,7 @@ export const saveFields = async (
     .select({ status: document.status })
     .from(document)
     .where(and(eq(document.id, id), eq(document.manageToken, manageToken)));
-  if (!doc || doc.status !== "draft") return false;
+  if (doc?.status !== "draft") return false;
 
   const signerRows = await db
     .select({ id: signer.id })
@@ -1163,7 +1163,7 @@ export const saveFieldsForOwner = async (
     .select({ status: document.status })
     .from(document)
     .where(and(eq(document.id, id), ownerAccess(ownerId, workspaceIds)));
-  if (!doc || doc.status !== "draft") return false;
+  if (doc?.status !== "draft") return false;
 
   const signerRows = await db
     .select({ id: signer.id })
@@ -1220,7 +1220,7 @@ export const sendDraft = async (
     })
     .from(document)
     .where(and(eq(document.id, id), eq(document.manageToken, manageToken)));
-  if (!doc || doc.status !== "draft") return null;
+  if (doc?.status !== "draft") return null;
 
   const now = new Date();
   await db
@@ -1273,7 +1273,7 @@ const loadDraftForManage = async (
     .select({ id: document.id, status: document.status })
     .from(document)
     .where(and(eq(document.id, id), eq(document.manageToken, manageToken)));
-  if (!doc || doc.status !== "draft") return null;
+  if (doc?.status !== "draft") return null;
   return doc;
 };
 
@@ -1292,7 +1292,7 @@ const loadDraftForOwner = async (
     .select({ id: document.id, status: document.status })
     .from(document)
     .where(and(eq(document.id, id), ownerAccess(ownerId, workspaceIds)));
-  if (!doc || doc.status !== "draft") return null;
+  if (doc?.status !== "draft") return null;
   return doc;
 };
 
@@ -1525,7 +1525,7 @@ export const correctOwnedSigner = async (
     .select()
     .from(document)
     .where(and(eq(document.id, id), ownerAccess(ownerId, workspaceIds)));
-  if (!doc || doc.status !== "sent") return null;
+  if (doc?.status !== "sent") return null;
 
   const [existing] = await db
     .select()
@@ -1606,7 +1606,7 @@ export const addSignerToSentDocument = async (
     .select()
     .from(document)
     .where(and(eq(document.id, id), ownerAccess(ownerId, workspaceIds)));
-  if (!doc || doc.status !== "sent") return null;
+  if (doc?.status !== "sent") return null;
   const added = await insertDraftSigner(db, id, input);
   if (!added) return null;
   return { ...added, documentName: doc.name };
@@ -1631,7 +1631,7 @@ export const removePendingSignerFromSent = async (
     .select({ id: document.id, status: document.status })
     .from(document)
     .where(and(eq(document.id, id), ownerAccess(ownerId, workspaceIds)));
-  if (!doc || doc.status !== "sent") return false;
+  if (doc?.status !== "sent") return false;
 
   const roster = await db
     .select({ id: signer.id, name: signer.name, status: signer.status })
