@@ -27,7 +27,7 @@
     "@signpdf/placeholder-pdf-lib": "4.0.0",
     "@signpdf/signer-p12": "4.0.0",
     "@signpdf/signpdf": "4.0.0",
-    "drizzle-orm": "0.45.1",
+    "drizzle-orm": "0.45.4",
     "elysia": "1.4.22",
     "jose": "^6.2.17",
     "node-forge": "1.4.3",
