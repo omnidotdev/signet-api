@@ -91,6 +91,21 @@ const js = (path: string) =>
     },
   });
 
+/**
+ * Derive the signer's network identity for the audit trail from request
+ * headers. The front end runs as a reverse proxy, so the real client address
+ * arrives in `x-forwarded-for` (leftmost hop) or `x-real-ip`; fall back to the
+ * socket address. The user-agent is the signer's browser
+ */
+const actorFromHeaders = (
+  headers: Record<string, string | undefined>,
+  socketAddress?: string | null,
+): { ip: string | null; userAgent: string | null } => {
+  const forwarded = headers["x-forwarded-for"]?.split(",")[0]?.trim();
+  const ip = forwarded || headers["x-real-ip"] || socketAddress || null;
+  return { ip: ip || null, userAgent: headers["user-agent"] ?? null };
+};
+
 // the public Omni Signing Root CA, published so verifiers can trust the chain
 const ROOT_CA_PATH = requireFile.resolve("../certs/omni-signing-root-ca.pem");
 
@@ -251,7 +266,13 @@ const app = new Elysia()
   // stateless quick-sign
   .post(
     "/api/sign",
-    async ({ body }) => {
+    async ({ body, set }) => {
+      // ESIGN / UETA: require the self-signer to affirm electronic-records
+      // consent before the document is stamped (the form sends "true")
+      if (body.consent !== "true") {
+        set.status = 422;
+        return { ok: false, error: "consent_required" };
+      }
       const input = new Uint8Array(await body.file.arrayBuffer());
       const signed = await signPdf(input, signer.pkcs12, {
         name: body.name || signer.commonName,
@@ -264,6 +285,7 @@ const app = new Elysia()
       body: t.Object({
         file: t.File({ type: "application/pdf" }),
         name: t.Optional(t.String()),
+        consent: t.Optional(t.String()),
       }),
     },
   );
@@ -573,7 +595,7 @@ if (hasDb) {
     })
     .post(
       "/api/documents/:id/sign-as-me",
-      async ({ params, session, body, set }) => {
+      async ({ params, session, body, headers, server, request, set }) => {
         if (!session) {
           set.status = 401;
           return { ok: false, error: "unauthorized" };
@@ -587,9 +609,15 @@ if (hasDb) {
           signatureImage: body?.signatureImage ?? null,
           textValues: body?.textValues ?? {},
           consent: body?.consent ?? false,
+          actor: actorFromHeaders(headers, server?.requestIP(request)?.address),
         });
         if (!result.ok) {
-          set.status = result.error === "not_found" ? 404 : 409;
+          set.status =
+            result.error === "not_found"
+              ? 404
+              : result.error === "consent_required"
+                ? 422
+                : 409;
           return { ok: false, error: result.error };
         }
         notifyAfterSign(result);
@@ -1167,7 +1195,7 @@ if (hasDb) {
     // signer applies their signature (typed name, drawn image, text fields)
     .post(
       "/sign/:token",
-      async ({ params, body, set }) => {
+      async ({ params, body, headers, server, request, set }) => {
         const result = await signByToken(
           db,
           signer,
@@ -1178,6 +1206,10 @@ if (hasDb) {
             textValues: body?.textValues ?? {},
             consent: body?.consent ?? false,
             accessCode: body?.accessCode ?? undefined,
+            actor: actorFromHeaders(
+              headers,
+              server?.requestIP(request)?.address,
+            ),
           },
         );
         if (!result.ok) {
@@ -1186,7 +1218,9 @@ if (hasDb) {
               ? 404
               : result.error === "locked"
                 ? 401
-                : 409;
+                : result.error === "consent_required"
+                  ? 422
+                  : 409;
           return { ok: false, error: result.error };
         }
         notifyAfterSign(result);

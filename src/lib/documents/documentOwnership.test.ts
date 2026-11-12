@@ -60,7 +60,13 @@ describe("document ownership", () => {
 
     expect(await getSignedPdfForOwner(db, req.id, "user-a")).toBeNull();
 
-    const result = await signByToken(db, serviceSigner, req.signToken);
+    const result = await signByToken(
+      db,
+      serviceSigner,
+      req.signToken,
+      undefined,
+      { consent: true },
+    );
     expect(result.ok).toBe(true);
 
     const mine = await getSignedPdfForOwner(db, req.id, "user-a");

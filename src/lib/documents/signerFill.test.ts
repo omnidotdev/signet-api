@@ -181,6 +181,7 @@ describe("signer fill overlay", () => {
     const result = await signByToken(db, serviceSigner, token, "Ada Lovelace", {
       signatureImage: PNG_1X1,
       textValues: textField ? { [textField.id]: "Acme Corp" } : {},
+      consent: true,
     });
     expect(result.ok).toBe(true);
     expect(result.completed).toBe(true);

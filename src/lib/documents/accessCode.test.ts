@@ -79,6 +79,7 @@ describe("signer access code", () => {
       "Ada Lovelace",
       {
         signatureImage: null,
+        consent: true,
       },
     );
     expect(refused.ok).toBe(false);

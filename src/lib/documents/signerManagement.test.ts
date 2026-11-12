@@ -236,6 +236,7 @@ describe("draft signer management", () => {
       serviceSigner,
       tokens[0] as string,
       "Alice",
+      { consent: true },
     );
     expect(first.ok).toBe(true);
     expect(first.completed).toBe(false);
@@ -244,6 +245,7 @@ describe("draft signer management", () => {
       serviceSigner,
       tokens[1] as string,
       "Bob",
+      { consent: true },
     );
     expect(second.ok).toBe(true);
     expect(second.completed).toBe(true);

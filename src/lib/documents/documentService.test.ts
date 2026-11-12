@@ -106,6 +106,7 @@ describe("multi-signer send", () => {
       serviceSigner,
       tokens[0] as string,
       "Ada",
+      { consent: true },
     );
     expect(first.ok).toBe(true);
     expect(first.completed).toBe(false);
@@ -115,6 +116,7 @@ describe("multi-signer send", () => {
       serviceSigner,
       tokens[1] as string,
       "Grace",
+      { consent: true },
     );
     expect(second.ok).toBe(true);
     expect(second.completed).toBe(true);
@@ -192,7 +194,13 @@ describe("document signing lifecycle", () => {
 
   test("signing produces a valid signed PDF and completes the document", async () => {
     const req = await newRequest();
-    const result = await signByToken(db, serviceSigner, req.signToken);
+    const result = await signByToken(
+      db,
+      serviceSigner,
+      req.signToken,
+      undefined,
+      { consent: true },
+    );
     expect(result.ok).toBe(true);
 
     const status = await getStatus(db, req.id, req.manageToken);
@@ -209,8 +217,16 @@ describe("document signing lifecycle", () => {
 
   test("a document cannot be signed twice", async () => {
     const req = await newRequest();
-    await signByToken(db, serviceSigner, req.signToken);
-    const second = await signByToken(db, serviceSigner, req.signToken);
+    await signByToken(db, serviceSigner, req.signToken, undefined, {
+      consent: true,
+    });
+    const second = await signByToken(
+      db,
+      serviceSigner,
+      req.signToken,
+      undefined,
+      { consent: true },
+    );
     expect(second.ok).toBe(false);
     expect(second.error).toBe("already_signed");
   });
@@ -226,7 +242,13 @@ describe("document signing lifecycle", () => {
   test("a voided document cannot be signed", async () => {
     const req = await newRequest();
     expect(await voidDocument(db, req.id, req.manageToken)).toBe(true);
-    const result = await signByToken(db, serviceSigner, req.signToken);
+    const result = await signByToken(
+      db,
+      serviceSigner,
+      req.signToken,
+      undefined,
+      { consent: true },
+    );
     expect(result.ok).toBe(false);
     expect(result.error).toBe("voided");
   });
@@ -234,7 +256,9 @@ describe("document signing lifecycle", () => {
   test("provenance records the full lifecycle and verifies", async () => {
     const req = await newRequest();
     await getSignerView(db, req.signToken);
-    await signByToken(db, serviceSigner, req.signToken);
+    await signByToken(db, serviceSigner, req.signToken, undefined, {
+      consent: true,
+    });
     const status = await getStatus(db, req.id, req.manageToken);
     expect(status?.provenanceValid).toBe(true);
   });

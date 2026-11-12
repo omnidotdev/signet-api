@@ -67,7 +67,9 @@ describe("workspace-scoped documents", () => {
     expect(file?.signed).toBe(false);
     expect(file?.bytes.length ?? 0).toBeGreaterThan(0);
     // once signed, the same call returns the sealed PDF
-    await signByToken(db, serviceSigner, req.signToken, "Ada");
+    await signByToken(db, serviceSigner, req.signToken, "Ada", {
+      consent: true,
+    });
     const after = await getDocumentFileForOwner(db, req.id, "alice", []);
     expect(after?.signed).toBe(true);
     // a stranger gets nothing
@@ -99,7 +101,9 @@ describe("workspace-scoped documents", () => {
     expect(remind?.signers[0]?.email).toBe("ada@example.com");
 
     // once signed, there is no one to remind
-    await signByToken(db, serviceSigner, req.signToken, "Ada");
+    await signByToken(db, serviceSigner, req.signToken, "Ada", {
+      consent: true,
+    });
     expect(await remindOwnedDocument(db, req.id, "alice", [])).toBeNull();
   });
 
@@ -169,7 +173,9 @@ describe("workspace-scoped documents", () => {
 
   test("a workspace member can download; a non-member cannot", async () => {
     const req = await make(db, { ownerId: "alice", organizationId: "ws-a" });
-    await signByToken(db, serviceSigner, req.signToken);
+    await signByToken(db, serviceSigner, req.signToken, undefined, {
+      consent: true,
+    });
 
     // owner
     expect(await getSignedPdfForMember(db, req.id, "alice", [])).not.toBeNull();

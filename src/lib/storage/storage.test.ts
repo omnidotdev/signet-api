@@ -106,7 +106,13 @@ describe("PDF object storage", () => {
       pdf: await tinyPdf(),
       signerName: "Ada",
     });
-    const result = await signByToken(db, serviceSigner, req.signToken);
+    const result = await signByToken(
+      db,
+      serviceSigner,
+      req.signToken,
+      undefined,
+      { consent: true },
+    );
     expect(result.ok).toBe(true);
     expect(result.completed).toBe(true);
 

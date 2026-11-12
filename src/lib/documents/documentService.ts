@@ -595,13 +595,28 @@ const assembleCertificate = (
   signers: (typeof signer.$inferSelect)[],
   chain: ProvenanceEvent[],
 ): CertificateData => {
-  // consent affirmed per signer, keyed by the adopted name on the signed event
+  // signing metadata per signer, keyed by the adopted name on the signed event:
+  // consent affirmation plus the audit-trail network identity (IP, user-agent)
   const consentByName = new Map<string, boolean>();
+  const actorByName = new Map<
+    string,
+    { ip: string | null; userAgent: string | null }
+  >();
   for (const e of chain) {
     if (e.type !== "document.signed") continue;
-    const d = e.data as { signer?: unknown; consent?: unknown };
-    if (typeof d.signer === "string")
+    const d = e.data as {
+      signer?: unknown;
+      consent?: unknown;
+      ip?: unknown;
+      userAgent?: unknown;
+    };
+    if (typeof d.signer === "string") {
       consentByName.set(d.signer, d.consent === true);
+      actorByName.set(d.signer, {
+        ip: typeof d.ip === "string" ? d.ip : null,
+        userAgent: typeof d.userAgent === "string" ? d.userAgent : null,
+      });
+    }
   }
   const completed = chain.find((e) => e.type === "document.completed");
 
@@ -618,6 +633,8 @@ const assembleCertificate = (
       email: s.email,
       signedAt: s.signedAt ? s.signedAt.toISOString() : null,
       consent: consentByName.get(s.name) ?? false,
+      ip: actorByName.get(s.name)?.ip ?? null,
+      userAgent: actorByName.get(s.name)?.userAgent ?? null,
     })),
     events: chain.map((e) => ({
       type: e.type,
@@ -1896,6 +1913,12 @@ export interface SignOptions {
   consent?: boolean;
   /** access code the signer entered, checked against the signer's code */
   accessCode?: string;
+  /**
+   * network identity of the signer at the moment of signing, captured for the
+   * audit trail (origin IP and browser user-agent). Recorded into the signed
+   * provenance event and surfaced on the Certificate of Completion
+   */
+  actor?: { ip?: string | null; userAgent?: string | null };
 }
 
 export const signByToken = async (
@@ -1937,6 +1960,12 @@ export const signByToken = async (
       );
     if (earlier.length > 0) return { ok: false, error: "out_of_order" };
   }
+
+  // ESIGN / UETA: the signer must affirmatively consent to sign electronically
+  // before any signature is accepted. This is a hard gate, not a recorded flag:
+  // a signature without consent is never applied
+  if (options?.consent !== true)
+    return { ok: false, error: "consent_required" };
 
   const adopted = signatureName?.trim() || sgn.name;
   const dateStamp = new Date().toISOString().slice(0, 10);
@@ -1994,9 +2023,13 @@ export const signByToken = async (
     type: "document.signed",
     data: {
       signer: adopted,
+      email: sgn.email ?? null,
       contentHash: doc.contentHash,
       fields: myFields.length,
-      consent: options?.consent === true,
+      // always true here: signing is gated on consent above
+      consent: true,
+      ip: options?.actor?.ip ?? null,
+      userAgent: options?.actor?.userAgent ?? null,
     },
   });
   emitSignatureCompleted({

@@ -59,6 +59,7 @@ describe("send-for-signature with auto-detected fields", () => {
       serviceSigner,
       req.signToken,
       "Grace B. Hopper",
+      { consent: true },
     );
     expect(result.ok).toBe(true);
 
@@ -84,7 +85,13 @@ describe("send-for-signature with auto-detected fields", () => {
     const view = await getSignerView(db, req.signToken);
     expect(view?.fields.signature).toBe(0);
 
-    const result = await signByToken(db, serviceSigner, req.signToken);
+    const result = await signByToken(
+      db,
+      serviceSigner,
+      req.signToken,
+      undefined,
+      { consent: true },
+    );
     expect(result.ok).toBe(true);
     expect(await getSignedPdf(db, req.id, req.manageToken)).toBeInstanceOf(
       Uint8Array,

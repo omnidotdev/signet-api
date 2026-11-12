@@ -118,6 +118,8 @@ describe("reminders", () => {
       db,
       serviceSigner,
       sentRes?.signers[0]?.signToken as string,
+      undefined,
+      { consent: true },
     );
     expect(await findDueReminders(db, new Date(), DAY)).toHaveLength(0);
   });
