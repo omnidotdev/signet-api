@@ -81,13 +81,21 @@ describe("multi-signer draft -> edit -> send -> sign", () => {
     const tokenB = sent?.signers[1]?.signToken as string;
 
     // first signer signs: not complete yet, no sealed PDF
-    const first = await signByToken(db, serviceSigner, tokenA, "Ada Lovelace");
+    const first = await signByToken(db, serviceSigner, tokenA, "Ada Lovelace", {
+      consent: true,
+    });
     expect(first.ok).toBe(true);
     expect(first.completed).toBe(false);
     expect(await getSignedPdf(db, draft.id, draft.manageToken)).toBeNull();
 
     // second signer signs: now complete and sealed
-    const second = await signByToken(db, serviceSigner, tokenB, "Grace Hopper");
+    const second = await signByToken(
+      db,
+      serviceSigner,
+      tokenB,
+      "Grace Hopper",
+      { consent: true },
+    );
     expect(second.ok).toBe(true);
     expect(second.completed).toBe(true);
 
@@ -115,6 +123,12 @@ describe("multi-signer draft -> edit -> send -> sign", () => {
     expect(editor?.status).toBe("draft");
     // sending twice is rejected (already sent)
     expect(await sendDraft(db, draft.id, draft.manageToken)).toBeNull();
-    expect((await signByToken(db, serviceSigner, token)).ok).toBe(true);
+    expect(
+      (
+        await signByToken(db, serviceSigner, token, undefined, {
+          consent: true,
+        })
+      ).ok,
+    ).toBe(true);
   });
 });

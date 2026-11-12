@@ -78,12 +78,18 @@ describe("sequential signing", () => {
     // the second signer is told to wait and cannot sign out of order
     const bView = await getSignerFillData(db, tokenB);
     expect(bView?.waitingFor).toBe("First Signer");
-    expect((await signByToken(db, serviceSigner, tokenB)).error).toBe(
-      "out_of_order",
-    );
+    expect(
+      (
+        await signByToken(db, serviceSigner, tokenB, undefined, {
+          consent: true,
+        })
+      ).error,
+    ).toBe("out_of_order");
 
     // first signer signs: not complete, and the next signer is handed off
-    const first = await signByToken(db, serviceSigner, tokenA);
+    const first = await signByToken(db, serviceSigner, tokenA, undefined, {
+      consent: true,
+    });
     expect(first.ok).toBe(true);
     expect(first.completed).toBe(false);
     expect(first.notifySigner?.email).toBe("second@example.com");
@@ -91,7 +97,9 @@ describe("sequential signing", () => {
     // now it is the second signer's turn
     const bView2 = await getSignerFillData(db, tokenB);
     expect(bView2?.waitingFor).toBeNull();
-    const second = await signByToken(db, serviceSigner, tokenB);
+    const second = await signByToken(db, serviceSigner, tokenB, undefined, {
+      consent: true,
+    });
     expect(second.completed).toBe(true);
   });
 
@@ -106,6 +114,12 @@ describe("sequential signing", () => {
     expect(sent?.signers.every((s) => s.active)).toBe(true);
     const tokenB = sent?.signers[1]?.signToken as string;
     // the second signer can sign first in parallel mode
-    expect((await signByToken(db, serviceSigner, tokenB)).ok).toBe(true);
+    expect(
+      (
+        await signByToken(db, serviceSigner, tokenB, undefined, {
+          consent: true,
+        })
+      ).ok,
+    ).toBe(true);
   });
 });

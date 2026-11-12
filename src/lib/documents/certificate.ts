@@ -9,6 +9,10 @@ export interface CertificateSigner {
   signedAt: string | null;
   /** whether the signer affirmed the electronic-records (ESIGN / UETA) consent */
   consent: boolean;
+  /** origin IP address captured when the signer signed, for the audit trail */
+  ip: string | null;
+  /** browser user-agent captured when the signer signed, for the audit trail */
+  userAgent: string | null;
 }
 
 /** Everything the certificate of completion renders, assembled from the ledger */
@@ -185,7 +189,7 @@ export const buildCompletionCertificate = async (
   text("SIGNERS", MARGIN, 9, bold, MUTED);
   y -= 20;
   for (const s of data.signers) {
-    ensure(58);
+    ensure(92);
     for (const line of wrap(s.name, 12, bold, PAGE_W - 2 * MARGIN)) {
       text(line, MARGIN, 12, bold);
       y -= 15;
@@ -211,7 +215,27 @@ export const buildCompletionCertificate = async (
       font,
       MUTED,
     );
-    y -= 22;
+    y -= 14;
+    // audit-trail network identity: where the signature originated. Only shown
+    // once the signer has actually signed (older records may lack it)
+    if (s.signedAt && (s.ip || s.userAgent)) {
+      if (s.ip) {
+        text(`IP address ${s.ip}`, MARGIN, 9, font, MUTED);
+        y -= 13;
+      }
+      if (s.userAgent) {
+        for (const line of wrap(
+          `Device ${s.userAgent}`,
+          9,
+          font,
+          PAGE_W - 2 * MARGIN,
+        )) {
+          text(line, MARGIN, 9, font, MUTED);
+          y -= 12;
+        }
+      }
+    }
+    y -= 10;
   }
 
   y -= 2;

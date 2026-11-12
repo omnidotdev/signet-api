@@ -54,6 +54,7 @@ export const signerFillPage = (data: SignerFillData, token: string): string => {
     <canvas id="pad" width="420" height="120"></canvas>
     <div><button type="button" id="pad-clear" class="link">Clear</button></div>
   </div>
+  <label class="consent"><input type="checkbox" id="consent" /> I agree to sign this document electronically and that my electronic signature is legally binding (ESIGN / UETA).</label>
 </div>
 
 <div class="toolbar">
@@ -219,10 +220,11 @@ document.getElementById("finish-btn").addEventListener("click", async () => {
   const name = sigText.value.trim();
   const img = drawnDataUrl();
   if (sigCount > 0 && !name && !img) { statusEl.textContent = "Type or draw your signature first."; return; }
+  if (!document.getElementById("consent").checked) { statusEl.textContent = "Please agree to sign electronically to continue."; return; }
   const btn = document.getElementById("finish-btn");
   btn.disabled = true; btn.textContent = "Signing...";
   try {
-    const body = { signature: name, signatureImage: img ? img.split(",")[1] : null, textValues };
+    const body = { signature: name, signatureImage: img ? img.split(",")[1] : null, textValues, consent: true };
     const res = await fetch("/sign/" + DATA.token, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
     if (!res.ok) throw new Error();
     try { localStorage.setItem("signet.sig", JSON.stringify({ name, image: img || savedSig.image || null })); } catch {}
