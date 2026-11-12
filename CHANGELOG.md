@@ -1,5 +1,11 @@
 # @omnidotdev/signet-api
 
+## 0.2.0
+
+### Minor Changes
+
+- [#61](https://github.com/omnidotdev/signet-api/pull/61) [`d9e18df`](https://github.com/omnidotdev/signet-api/commit/d9e18dfa38f0b02012b179b2a61cdd113fbe709e) Thanks [@coopbri](https://github.com/coopbri)! - Strengthen the signing audit trail and enforce electronic-records consent. The signed provenance event now records the signer's origin IP address, browser user-agent, and email, and the Certificate of Completion renders the IP and device for each signer. ESIGN / UETA consent is now a hard gate: a signature is refused with `consent_required` unless the signer affirmatively consents, across the signer, sign-as-me, and self-sign paths.
+
 ## 0.1.0
 
 ### Minor Changes
