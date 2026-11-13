@@ -56,6 +56,7 @@ import {
   verifySignerOtp,
   voidDocument,
 } from "./lib/documents/documentService.ts";
+import { ensurePdf, UnsupportedUploadError } from "./lib/documents/ingest.ts";
 import { resolveMySignToken } from "./lib/documents/signAsMe.ts";
 import {
   createDraftFromTemplate,
@@ -128,6 +129,18 @@ const authEnabled = authConfig !== null;
 const secureCookies = baseUrl.startsWith("https");
 
 const SESSION_COOKIE = "signet_session";
+
+// uploads a sender can turn into a signable PDF; the bytes are verified by magic
+// number in ensurePdf, this is only the first-pass MIME gate (DOCX fidelity needs
+// the office converter in the runtime image, otherwise it is rejected cleanly)
+const UPLOAD_FILE = t.File({
+  type: [
+    "application/pdf",
+    "image/png",
+    "image/jpeg",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  ],
+});
 const TX_COOKIE = "signet_tx";
 const SESSION_MAX_AGE = 60 * 60 * 24 * 7;
 
@@ -296,7 +309,19 @@ const app = new Elysia()
         set.status = 422;
         return { ok: false, error: "consent_required" };
       }
-      const input = new Uint8Array(await body.file.arrayBuffer());
+      let input: Uint8Array;
+      try {
+        input = await ensurePdf(
+          new Uint8Array(await body.file.arrayBuffer()),
+          body.file.name,
+        );
+      } catch (e) {
+        if (e instanceof UnsupportedUploadError) {
+          set.status = 415;
+          return { ok: false, error: "unsupported_format" };
+        }
+        throw e;
+      }
       const signed = await signPdf(input, signer.pkcs12, {
         name: body.name || signer.commonName,
         reason: "Signed with Signet",
@@ -306,7 +331,7 @@ const app = new Elysia()
     },
     {
       body: t.Object({
-        file: t.File({ type: "application/pdf" }),
+        file: UPLOAD_FILE,
         name: t.Optional(t.String()),
         consent: t.Optional(t.String()),
       }),
@@ -420,7 +445,19 @@ if (hasDb) {
     .post(
       "/api/documents",
       async ({ body, session, set }) => {
-        const pdf = new Uint8Array(await body.file.arrayBuffer());
+        let pdf: Uint8Array;
+        try {
+          pdf = await ensurePdf(
+            new Uint8Array(await body.file.arrayBuffer()),
+            body.file.name,
+          );
+        } catch (e) {
+          if (e instanceof UnsupportedUploadError) {
+            set.status = 415;
+            return { error: "unsupported_format" };
+          }
+          throw e;
+        }
         const documentName = body.name || body.file.name || "Document";
 
         // Multi-signer send: a JSON `signers` array ([{name,email?}]) takes
@@ -509,7 +546,7 @@ if (hasDb) {
       },
       {
         body: t.Object({
-          file: t.File({ type: "application/pdf" }),
+          file: UPLOAD_FILE,
           name: t.Optional(t.String()),
           // legacy single-signer fields (kept for back-compat)
           signerName: t.Optional(t.String()),
@@ -1019,7 +1056,19 @@ if (hasDb) {
     .post(
       "/api/drafts",
       async ({ body, session, set }) => {
-        const pdf = new Uint8Array(await body.file.arrayBuffer());
+        let pdf: Uint8Array;
+        try {
+          pdf = await ensurePdf(
+            new Uint8Array(await body.file.arrayBuffer()),
+            body.file.name,
+          );
+        } catch (e) {
+          if (e instanceof UnsupportedUploadError) {
+            set.status = 415;
+            return { error: "unsupported_format" };
+          }
+          throw e;
+        }
         const documentName = body.name || body.file.name || "Document";
         let signers: { name: string; email?: string }[] = [];
         try {
@@ -1060,7 +1109,7 @@ if (hasDb) {
       },
       {
         body: t.Object({
-          file: t.File({ type: "application/pdf" }),
+          file: UPLOAD_FILE,
           name: t.Optional(t.String()),
           signers: t.String(),
           signingMode: t.Optional(t.String()),
