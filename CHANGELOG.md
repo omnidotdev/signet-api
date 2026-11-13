@@ -1,5 +1,59 @@
 # @omnidotdev/signet-api
 
+## 0.5.0
+
+### Minor Changes
+
+- [#88](https://github.com/omnidotdev/signet-api/pull/88) [`dd22364`](https://github.com/omnidotdev/signet-api/commit/dd22364da10f4a74a423d5a532cdda9342443243) Thanks [@coopbri](https://github.com/coopbri)! - Add managed API keys for programmatic sending. An account issues named keys
+  (`POST /api/keys`, the `sgk_` secret is returned once and only its SHA-256 hash
+  is stored), lists them (`GET /api/keys`), and revokes them (`DELETE
+  /api/keys/:id`). A key sent as `Authorization: Bearer` acts as its owner in the
+  workspace active when it was issued, on the same routes as the signed-in app. A
+  presented key never falls back to a browser session, key management refuses
+  key-authenticated requests, each key is rate limited (120 requests a minute by
+  default, `429` with `Retry-After`), and an owner may hold up to 25 active keys.
+  The README now documents API access, templates, and bulk send, and reflects
+  what the service does today.
+
+- [#82](https://github.com/omnidotdev/signet-api/pull/82) [`07bb155`](https://github.com/omnidotdev/signet-api/commit/07bb1554a2b3ed14ca21d2a89b640a609420020d) Thanks [@coopbri](https://github.com/coopbri)! - Let signers choose a handwriting style for a typed signature. Besides the classic
+  oblique style, three bundled handwriting faces (Sacramento, Mr Dafoe, Homemade
+  Apple, under the SIL Open Font License and Apache 2.0) are available. The chosen
+  face is embedded, subset to the glyphs of the signer's name, into the sealed PDF
+  for that signer's signature and initials; a name the face cannot render falls
+  back to the classic style. The style is stored on the signer and on a user's
+  saved signature. Unknown style values are stored as the classic default.
+
+- [#85](https://github.com/omnidotdev/signet-api/pull/85) [`b12ddc4`](https://github.com/omnidotdev/signet-api/commit/b12ddc41c0f4b7cc1f8227c4babc6047d468b7e3) Thanks [@coopbri](https://github.com/coopbri)! - Templates now carry per-signer roles and the full field setup. Saving a
+  multi-signer draft as a template records which signer role fills each field
+  ("Signer 1", "Signer 2", ...) along with each field's options, requirement, date
+  format, and color; starting from the template maps the given signers onto those
+  roles in order and refuses a start that leaves a role without a signer
+  (`signers_for_each_role`). Templates saved before roles existed keep working as
+  single-role templates.
+  
+  Add bulk send: `POST /api/templates/:id/bulk-send` sends one template to up to
+  100 recipients in one request. Each row (a signer with an email for every role)
+  becomes its own sent document and its signers are emailed their links. Every row
+  is validated before anything is created, so a bad batch never half-sends; a row
+  that fails afterwards is reported without stopping the rest.
+
+### Patch Changes
+
+- [#86](https://github.com/omnidotdev/signet-api/pull/86) [`6164573`](https://github.com/omnidotdev/signet-api/commit/6164573c6e5ac9d9bd23d39da31500083f9a3302) Thanks [@coopbri](https://github.com/coopbri)! - Fix sending a document with signers from the upload form. The form sends its
+  signer list as a JSON string, but the server framework JSON-parses multipart
+  text fields that look like JSON, so the list arrived as an array and the request
+  was rejected as invalid (422) before anything was created. `/api/documents` and
+  `/api/drafts` now accept the signer list either way, and ignore malformed
+  entries instead of failing.
+
+- [#87](https://github.com/omnidotdev/signet-api/pull/87) [`cc46c2f`](https://github.com/omnidotdev/signet-api/commit/cc46c2f41b386ec1132511fec7aa4bf6205121f2) Thanks [@coopbri](https://github.com/coopbri)! - Harden error handling. The API no longer crashes when its database restarts or
+  fails over: a dropped idle connection is logged and the pool reconnects, where
+  previously the unhandled connection error took the whole process down. An
+  unexpected failure now answers with a generic `internal_error` (details are
+  logged server-side) instead of returning the raw exception message, a corrupt
+  or unreadable image or Word upload is rejected as `unsupported_format` (415)
+  rather than a 500, and a malformed template id returns not-found.
+
 ## 0.4.0
 
 ### Minor Changes
