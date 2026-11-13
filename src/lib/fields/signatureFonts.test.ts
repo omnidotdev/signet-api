@@ -3,10 +3,13 @@ import { describe, expect, test } from "bun:test";
 import { PDFDict, PDFDocument, PDFName } from "pdf-lib";
 
 import {
+  CLASSIC_X_HEIGHT_EM,
+  handwritingSize,
   isSignatureFont,
   loadSignatureFont,
   SIGNATURE_FONTS,
   signatureFontOrNull,
+  signatureFontXHeight,
 } from "./signatureFonts.ts";
 import { stampFields } from "./stamp.ts";
 
@@ -93,5 +96,39 @@ describe("stamping a typed signature in a handwriting style", () => {
     expect(
       (await embeddedFontNames(pdf)).some((f) => f.includes("Sacramento")),
     ).toBe(false);
+  });
+});
+
+describe("handwriting optical size", () => {
+  test("each face is scaled so its lowercase letters match the classic signature", async () => {
+    for (const id of SIGNATURE_FONTS) {
+      if (id === "classic") continue;
+      const xHeightEm = await signatureFontXHeight(id);
+      expect(xHeightEm).not.toBeNull();
+      const size = handwritingSize(12, xHeightEm as number);
+      // the face's x-height at its size equals Helvetica Oblique's at 12pt
+      expect(size * (xHeightEm as number)).toBeCloseTo(
+        12 * CLASSIC_X_HEIGHT_EM,
+        5,
+      );
+    }
+  });
+
+  test("thin flowing faces draw larger than the classic size, a big-bodied face does not", async () => {
+    const sacramento = handwritingSize(
+      12,
+      (await signatureFontXHeight("sacramento")) as number,
+    );
+    const homemade = handwritingSize(
+      12,
+      (await signatureFontXHeight("homemade")) as number,
+    );
+    expect(sacramento).toBeGreaterThan(18);
+    expect(homemade).toBeLessThan(12);
+  });
+
+  test("classic and unknown styles have no handwriting metrics", async () => {
+    expect(await signatureFontXHeight("classic")).toBeNull();
+    expect(await signatureFontXHeight("nope")).toBeNull();
   });
 });

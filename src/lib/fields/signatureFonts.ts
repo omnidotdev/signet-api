@@ -9,6 +9,8 @@
 
 import { readFile } from "node:fs/promises";
 
+import fontkit from "@pdf-lib/fontkit";
+
 export const SIGNATURE_FONTS = [
   "classic",
   "sacramento",
@@ -59,3 +61,45 @@ export const loadSignatureFont = async (
   cache.set(font, bytes);
   return bytes;
 };
+
+/**
+ * x-height of Helvetica Oblique (AFM XHeight 523 per 1000 em), the face of the
+ * classic signature. Handwriting faces are sized to match it
+ */
+export const CLASSIC_X_HEIGHT_EM = 0.523;
+
+const xHeights = new Map<string, number>();
+
+/**
+ * A handwriting face's x-height as a fraction of its em, read from the font's
+ * own metrics; null for the classic style or an unknown id. Script faces vary
+ * widely (Sacramento's lowercase is about 0.31 em, Homemade Apple's about 0.59)
+ * so a shared point size would make some look tiny and others oversized
+ */
+export const signatureFontXHeight = async (
+  id: string | null | undefined,
+): Promise<number | null> => {
+  const font = signatureFontOrNull(id);
+  if (!font) return null;
+  const cached = xHeights.get(font);
+  if (cached) return cached;
+  const bytes = await loadSignatureFont(font);
+  if (!bytes) return null;
+  const metrics = fontkit.create(bytes) as {
+    xHeight: number;
+    unitsPerEm: number;
+  };
+  const xHeightEm = metrics.xHeight / metrics.unitsPerEm;
+  xHeights.set(font, xHeightEm);
+  return xHeightEm;
+};
+
+/**
+ * The point size at which a handwriting face's lowercase letters stand as tall
+ * as the classic signature's at `classicSize`, so every style reads at the same
+ * visual size (optical sizing by x-height)
+ */
+export const handwritingSize = (
+  classicSize: number,
+  xHeightEm: number,
+): number => (classicSize * CLASSIC_X_HEIGHT_EM) / xHeightEm;

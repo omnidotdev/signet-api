@@ -10,7 +10,11 @@ import fontkit from "@pdf-lib/fontkit";
 import type { PDFFont, RGB } from "pdf-lib";
 import { PDFDocument, rgb, StandardFonts } from "pdf-lib";
 
-import { loadSignatureFont } from "./signatureFonts.ts";
+import {
+  handwritingSize,
+  loadSignatureFont,
+  signatureFontXHeight,
+} from "./signatureFonts.ts";
 
 export interface StampField {
   /** signature | date | initials | text | checkbox */
@@ -209,11 +213,11 @@ export const stampFields = async (
     const isMark = field.type === "signature" || field.type === "initials";
     const hand = isMark ? await handwriting(field.font, text) : null;
     const font = hand ?? (isMark ? await script() : await plain());
-    // handwriting faces have tall ascenders and long swashes, so they read at
-    // a larger size than the oblique sans in the same box
-    let size = hand
-      ? Math.min(field.height * 0.8, 26)
-      : Math.min(field.height, 14);
+    // a handwriting face is sized so its lowercase matches the classic
+    // signature's, then shrunk below if it would overrun the field's width
+    let size = Math.min(field.height, 14);
+    const xHeightEm = hand ? await signatureFontXHeight(field.font) : null;
+    if (xHeightEm) size = handwritingSize(size, xHeightEm);
     while (size > 6 && font.widthOfTextAtSize(text, size) > field.width) {
       size -= 0.5;
     }
