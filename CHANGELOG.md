@@ -1,5 +1,28 @@
 # @omnidotdev/signet-api
 
+## 0.4.0
+
+### Minor Changes
+
+- [#80](https://github.com/omnidotdev/signet-api/pull/80) [`9bb0e94`](https://github.com/omnidotdev/signet-api/commit/9bb0e94f649683d4efc6acf6c788b1c95de305b0) Thanks [@coopbri](https://github.com/coopbri)! - Install headless LibreOffice (Writer) in the API image so DOCX uploads convert to
+  PDF with full fidelity. This activates the office converter shipped alongside
+  image upload: a Word document uploaded to sign or send is now rendered to PDF
+  server-side instead of being rejected as an unsupported format.
+
+- [#77](https://github.com/omnidotdev/signet-api/pull/77) [`f715211`](https://github.com/omnidotdev/signet-api/commit/f7152116ee3bf9c9bd39c743e747154ca33fb9d7) Thanks [@coopbri](https://github.com/coopbri)! - Accept image uploads (PNG, JPEG) when signing or sending a document, converting
+  each to a single PDF page server-side so the rest of the signing pipeline is
+  unchanged. Uploads are now recognized by their content (magic bytes), not only
+  the browser-supplied MIME type. A headless office converter for DOCX is wired in
+  but stays inactive until the converter binary is present in the runtime image, so
+  a DOCX upload is rejected with a clean `unsupported_format` until then.
+
+- [#73](https://github.com/omnidotdev/signet-api/pull/73) [`9b04296`](https://github.com/omnidotdev/signet-api/commit/9b04296546df9d7196fb94ab18fae0e3644ca8f7) Thanks [@coopbri](https://github.com/coopbri)! - Add sender-configurable field styling. A date field now carries a date format
+  (ISO, US, EU, or a long "Month D, YYYY" style) that is applied when the signer
+  signs, so the signed PDF renders the date in the sender's chosen style. Any field
+  can carry an ink color (as `#rrggbb`) for its stamped mark, falling back to the
+  default signing ink when unset. Both attributes round-trip through the field
+  editor and the signer fill data.
+
 ## 0.3.0
 
 ### Minor Changes
