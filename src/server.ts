@@ -51,6 +51,7 @@ import {
   removeSignerFromDraft,
   renameOwnedDocument,
   resendSignerOtp,
+  reviseOwnedDocument,
   saveFields,
   saveFieldsForOwner,
   sendDraft,
@@ -626,6 +627,48 @@ if (hasDb) {
         })),
       };
     })
+    // start a new version of a document from a new file: the current version
+    // is voided if it is still out for signature (a completed one stays sealed)
+    // and a linked draft keeps its signers and layout for review before sending
+    .post(
+      "/api/documents/:id/revise",
+      async ({ params, session, body, set }) => {
+        if (!session) {
+          set.status = 401;
+          return { ok: false, error: "unauthorized" };
+        }
+        let pdf: Uint8Array;
+        try {
+          pdf = await ensurePdf(
+            new Uint8Array(await body.file.arrayBuffer()),
+            body.file.name,
+          );
+        } catch (e) {
+          if (e instanceof UnsupportedUploadError) {
+            set.status = 415;
+            return { ok: false, error: "unsupported_format" };
+          }
+          throw e;
+        }
+        const result = await reviseOwnedDocument(db, {
+          id: params.id,
+          ownerId: session.sub,
+          workspaceIds: (session.workspaces ?? []).map((w) => w.id),
+          pdf,
+        });
+        if (!result.ok) {
+          set.status = result.error === "not_found" ? 404 : 409;
+          return result;
+        }
+        set.status = 201;
+        return {
+          ok: true,
+          draftId: result.draft.id,
+          voidedPrevious: result.voidedPrevious,
+        };
+      },
+      { body: t.Object({ file: UPLOAD_FILE }) },
+    )
     // full status + history for a document the signed-in owner owns
     .get("/api/documents/:id", async ({ params, session, set }) => {
       if (!session) {
