@@ -248,11 +248,13 @@ export interface MultiSignerRequest {
 
 /**
  * Assign detected fields to signers for an unattended multi-signer send (no
- * field editor). Signature and initials fields are handed out top-to-bottom,
- * round-robin across the signers, so each party gets their own signing line in
- * a standard multi-party block. A date or text field is paired to the nearest
- * signature on its page (so a party's date fills when they sign), else to the
- * first signer. Returns the signer index for each detected field.
+ * field editor). Signature and initials fields are handed out in reading order
+ * (top-to-bottom, then left-to-right on the same line), round-robin across the
+ * signers, so each party gets their own signing line in a standard multi-party
+ * block. A date or text field is paired to the nearest signature on its page by
+ * true distance (horizontal and vertical), so in a side-by-side block each
+ * party's date sits with their own signature and fills when they sign; else it
+ * goes to the first signer. Returns the signer index for each detected field.
  */
 const autoAssignSigners = (
   fields: DetectedField[],
@@ -261,7 +263,7 @@ const autoAssignSigners = (
   const sigOrder = fields
     .map((f, i) => ({ f, i }))
     .filter(({ f }) => f.type === "signature" || f.type === "initials")
-    .sort((a, b) => a.f.page - b.f.page || b.f.y - a.f.y);
+    .sort((a, b) => a.f.page - b.f.page || b.f.y - a.f.y || a.f.x - b.f.x);
   const indexToSigner = new Map<number, number>();
   sigOrder.forEach(({ i }, rank) => {
     indexToSigner.set(i, rank % signerCount);
@@ -269,12 +271,14 @@ const autoAssignSigners = (
   return fields.map((f, i) => {
     const direct = indexToSigner.get(i);
     if (direct !== undefined) return direct;
-    // nearest signature on the same page
+    // nearest signature on the same page, by true distance: comparing heights
+    // alone ties every signature on a side-by-side line, which handed all the
+    // dates to the first party
     let best: number | null = null;
     let bestDist = Number.POSITIVE_INFINITY;
     for (const { f: s, i: si } of sigOrder) {
       if (s.page !== f.page) continue;
-      const d = Math.abs(s.y - f.y);
+      const d = Math.hypot(s.x - f.x, s.y - f.y);
       if (d < bestDist) {
         bestDist = d;
         best = indexToSigner.get(si) ?? 0;
