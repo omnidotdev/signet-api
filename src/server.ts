@@ -1101,6 +1101,8 @@ if (hasDb) {
               y: t.Number(),
               width: t.Number(),
               height: t.Number(),
+              dateFormat: t.Optional(t.Union([t.String(), t.Null()])),
+              color: t.Optional(t.Union([t.String(), t.Null()])),
             }),
           ),
         }),
