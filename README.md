@@ -78,7 +78,9 @@ the row indexes).
 A signed document is never edited. To change a contract, upload the new file to
 `POST /api/documents/:id/revise` (multipart `file`). This creates the next
 version as a draft, linked to the previous one, with the same signers, order,
-settings, and field layout, to review and send. A document still out for
+settings, and field layout, to review and send. Blanks in the new file that
+have no field yet (for example a date line) are detected and added, each given
+to the signer whose signature is nearest. A document still out for
 signature is voided first; a completed one is kept unchanged as the record of
 what was signed.
 
