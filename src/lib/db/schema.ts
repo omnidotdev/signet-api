@@ -69,6 +69,8 @@ export const signer = pgTable("signer", {
   color: text("color"),
   /** base64 PNG of a drawn signature, stamped into this signer's fields */
   signatureImage: text("signature_image"),
+  /** handwriting style of a typed signature (see signatureFonts), null = classic */
+  signatureFont: text("signature_font"),
   /** when this signer was last reminded, to rate-limit reminder emails */
   lastReminderAt: timestamp("last_reminder_at", { withTimezone: true }),
   signedAt: timestamp("signed_at", { withTimezone: true }),
@@ -170,6 +172,8 @@ export const userSignature = pgTable("user_signature", {
   image: text("image"),
   /** type | draw | upload: how the signature was adopted, to restore the editor */
   mode: text("mode").notNull().default("type"),
+  /** handwriting style of the typed signature (see signatureFonts), null = classic */
+  font: text("font"),
   updatedAt: timestamp("updated_at", { withTimezone: true })
     .notNull()
     .defaultNow(),

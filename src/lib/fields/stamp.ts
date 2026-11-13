@@ -6,8 +6,11 @@
  * so several signers can fill their own fields independently.
  */
 
-import type { RGB } from "pdf-lib";
+import fontkit from "@pdf-lib/fontkit";
+import type { PDFFont, RGB } from "pdf-lib";
 import { PDFDocument, rgb, StandardFonts } from "pdf-lib";
+
+import { loadSignatureFont } from "./signatureFonts.ts";
 
 export interface StampField {
   /** signature | date | initials | text | checkbox */
@@ -25,6 +28,11 @@ export interface StampField {
   options?: string[] | null;
   /** the sender's chosen ink, as #rrggbb; the default ink is used when unset */
   color?: string | null;
+  /**
+   * the signer's handwriting style for a typed signature or initials (see
+   * signatureFonts); ignored for every other field type and for drawn images
+   */
+  font?: string | null;
 }
 
 /** The default ink every mark uses unless the sender picked a field color */
@@ -83,9 +91,47 @@ export const stampFields = async (
   if (toDraw.length === 0) return pdf;
 
   const doc = await PDFDocument.load(pdf);
+  doc.registerFontkit(fontkit);
   const pages = doc.getPages();
-  const script = await doc.embedFont(StandardFonts.HelveticaOblique);
-  const plain = await doc.embedFont(StandardFonts.Helvetica);
+
+  // fonts are embedded on first use, so a document only carries the faces it
+  // actually draws with (a handwriting signature does not drag in the oblique)
+  const embedded = new Map<string, PDFFont>();
+  const standard = async (name: StandardFonts): Promise<PDFFont> => {
+    let font = embedded.get(name);
+    if (!font) {
+      font = await doc.embedFont(name);
+      embedded.set(name, font);
+    }
+    return font;
+  };
+  const plain = () => standard(StandardFonts.Helvetica);
+  const script = () => standard(StandardFonts.HelveticaOblique);
+  /**
+   * The handwriting face for a typed signature, embedded subset so only the
+   * glyphs of the name are carried. Null when no style was chosen or the face
+   * cannot draw every character of the text (a name outside its character set
+   * falls back to the classic oblique rather than rendering missing glyphs)
+   */
+  const handwriting = async (
+    id: string | null | undefined,
+    text: string,
+  ): Promise<PDFFont | null> => {
+    if (!id) return null;
+    let font = embedded.get(`hand:${id}`);
+    if (!font) {
+      const bytes = await loadSignatureFont(id);
+      if (!bytes) return null;
+      font = await doc.embedFont(bytes, { subset: true });
+      embedded.set(`hand:${id}`, font);
+    }
+    const supported = new Set(font.getCharacterSet());
+    for (const ch of text) {
+      const cp = ch.codePointAt(0) as number;
+      if (ch.trim() && !supported.has(cp)) return null;
+    }
+    return font;
+  };
 
   for (const field of toDraw) {
     const page = pages[field.page - 1];
@@ -139,7 +185,7 @@ export const stampFields = async (
           x: cx + r + 4,
           y: cy - size * 0.35,
           size,
-          font: plain,
+          font: await plain(),
           color: ink,
         });
       }
@@ -160,14 +206,14 @@ export const stampFields = async (
 
     const text = field.value;
     if (!text) continue;
-    const font =
-      field.type === "date" ||
-      field.type === "text" ||
-      field.type === "dropdown" ||
-      field.type === "radio"
-        ? plain
-        : script;
-    let size = Math.min(field.height, 14);
+    const isMark = field.type === "signature" || field.type === "initials";
+    const hand = isMark ? await handwriting(field.font, text) : null;
+    const font = hand ?? (isMark ? await script() : await plain());
+    // handwriting faces have tall ascenders and long swashes, so they read at
+    // a larger size than the oblique sans in the same box
+    let size = hand
+      ? Math.min(field.height * 0.8, 26)
+      : Math.min(field.height, 14);
     while (size > 6 && font.widthOfTextAtSize(text, size) > field.width) {
       size -= 0.5;
     }

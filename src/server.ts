@@ -671,6 +671,7 @@ if (hasDb) {
         }
         const result = await signByToken(db, signer, token, body?.signature, {
           signatureImage: body?.signatureImage ?? null,
+          signatureFont: body?.signatureFont ?? null,
           textValues: body?.textValues ?? {},
           consent: body?.consent ?? false,
           // the owner is authenticated here, so their identity is already
@@ -695,6 +696,7 @@ if (hasDb) {
           t.Object({
             signature: t.Optional(t.String()),
             signatureImage: t.Optional(t.Union([t.String(), t.Null()])),
+            signatureFont: t.Optional(t.Union([t.String(), t.Null()])),
             textValues: t.Optional(t.Record(t.String(), t.String())),
             consent: t.Optional(t.Boolean()),
           }),
@@ -742,6 +744,7 @@ if (hasDb) {
           typedName: body.typedName ?? null,
           image: body.image ?? null,
           mode: body.mode,
+          font: body.font ?? null,
         });
         return { ok: true };
       },
@@ -750,6 +753,7 @@ if (hasDb) {
           typedName: t.Optional(t.Union([t.String(), t.Null()])),
           image: t.Optional(t.Union([t.String(), t.Null()])),
           mode: t.String(),
+          font: t.Optional(t.Union([t.String(), t.Null()])),
         }),
       },
     )
@@ -1364,6 +1368,7 @@ if (hasDb) {
           body?.signature,
           {
             signatureImage: body?.signatureImage ?? null,
+            signatureFont: body?.signatureFont ?? null,
             textValues: body?.textValues ?? {},
             consent: body?.consent ?? false,
             accessCode: body?.accessCode ?? undefined,
@@ -1394,6 +1399,7 @@ if (hasDb) {
           t.Object({
             signature: t.Optional(t.String()),
             signatureImage: t.Optional(t.Union([t.String(), t.Null()])),
+            signatureFont: t.Optional(t.Union([t.String(), t.Null()])),
             textValues: t.Optional(t.Record(t.String(), t.String())),
             consent: t.Optional(t.Boolean()),
             accessCode: t.Optional(t.String()),
