@@ -4,9 +4,12 @@ Signet is Omni's provenance-first e-signature service: sign documents with a
 cryptographically verifiable signature and a tamper-evident provenance trail,
 fully self-hostable and freely embeddable across Omni products.
 
-Status: early development. The signing core is implemented and verified; the
-service layer (Elysia + Postgraphile + Drizzle), Gatekeeper identity, Arbor
-storage, and Vortex events are not built yet.
+Status: in production at signet.omni.dev. The service (Elysia + Drizzle on
+Postgres) runs send-for-signature end to end: multi-signer and sequential
+flows, field placement, templates, email delivery, identity verification by
+emailed one-time code, a tamper-evident provenance ledger, RFC 3161
+timestamps, and a Certificate of Completion. Identity is Gatekeeper (OIDC),
+PDFs can live in S3-compatible storage, and lifecycle events go to Vortex.
 
 ## What works today
 
@@ -23,6 +26,53 @@ storage, and Vortex events are not built yet.
 Signatures are independently verifiable with standard tooling, for example
 poppler's `pdfsig`.
 
+## API access
+
+Send documents from your own systems with a managed API key. Create one on the
+Profile page in Signet; the secret is shown once. Send it as a bearer token.
+This creates a document from a PDF (or PNG, JPEG, or DOCX) and emails each
+signer their link:
+
+```sh
+curl https://api.signet.omni.dev/api/documents \
+  -H "Authorization: Bearer sgk_..." \
+  -F file=@contract.pdf \
+  -F 'signers=[{"name":"Ada Lovelace","email":"ada@example.com"}]'
+```
+
+A key acts as the account that created it, in the workspace that was active
+then, and works on the same routes as the signed-in app (create and send
+documents, templates, status, downloads). Each key is limited to 120 requests a
+minute (`429` with `Retry-After` beyond that). Keys are managed only from a
+signed-in session, never with a key, and can be revoked at any time; a revoked
+key stops working immediately. Only a hash of each key is stored.
+
+### Templates and bulk send
+
+A template remembers its signer roles ("Signer 1", "Signer 2", ...) and every
+field's role, options, and styling. Send one template to many recipients with
+`POST /api/templates/:id/bulk-send`, up to 100 documents per request:
+
+```json
+{
+  "rows": [
+    [
+      { "name": "Ada", "email": "ada@example.com" },
+      { "name": "HR", "email": "hr@example.com" }
+    ],
+    [
+      { "name": "Grace", "email": "grace@example.com" },
+      { "name": "HR", "email": "hr@example.com" }
+    ]
+  ]
+}
+```
+
+Each row gives a signer with an email for every role, in role order, and
+becomes its own sent document. All rows are validated before anything is
+created; a batch with an invalid row is rejected whole (`invalid_rows`, with
+the row indexes).
+
 ## Try it
 
 ```sh
@@ -33,12 +83,10 @@ bun run demo    # writes a signed PDF to ~/Downloads/signet-demo
 
 ## Roadmap (see plan)
 
-`~/projects/omni/plans/2026-11-08-signet-esign-and-fabric-substrate-design.md`
+`~/projects/omni/plans/2026-11-12-signet-gtm-parity-audit.md`
 
-- Trusted timestamps (RFC-3161)
-- Gatekeeper-issued signer certificates
-- Multi-signer flows and an embeddable signing widget
-- Elysia + Postgraphile + Drizzle service, Arbor storage, Vortex events
+- SMS one-time codes and stronger identity verification tiers
+- An embeddable signing widget
 
 ## License
 
