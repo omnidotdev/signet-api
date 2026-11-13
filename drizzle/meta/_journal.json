@@ -127,6 +127,13 @@
       "when": 1794546513977,
       "tag": "0017_careless_sprite",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1794547381439,
+      "tag": "0018_thick_longshot",
+      "breakpoints": true
     }
   ]
 }

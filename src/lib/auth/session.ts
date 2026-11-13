@@ -28,6 +28,11 @@ export interface Session {
   organizationId?: string;
   /** every workspace the sender belongs to, for the switcher and access checks */
   workspaces?: Workspace[];
+  /**
+   * set when the request authenticated with a managed API key rather than an
+   * interactive session; key management itself refuses such sessions
+   */
+  apiKeyId?: string;
 }
 
 /** The in-flight OIDC login carried in the transaction cookie */

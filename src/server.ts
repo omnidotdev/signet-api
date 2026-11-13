@@ -1,5 +1,12 @@
 import { createRequire } from "node:module";
 import { Elysia, t } from "elysia";
+import {
+  createApiKey,
+  createRateLimiter,
+  listApiKeys,
+  resolveApiKey,
+  revokeApiKey,
+} from "./lib/auth/apiKeys.ts";
 import { loadAuthConfig } from "./lib/auth/config.ts";
 import {
   buildAuthorizeUrl,
@@ -255,6 +262,14 @@ const notifyAfterDecline = (
 
 const SERVICE_KEY = process.env.SIGNET_SERVICE_KEY;
 
+// each managed API key gets its own request budget so one integration cannot
+// flood the service
+const API_KEY_RATE_LIMIT = Number(process.env.SIGNET_API_KEY_RATE_LIMIT ?? 120);
+const apiKeyLimiter = createRateLimiter({
+  limit: API_KEY_RATE_LIMIT,
+  windowMs: 60_000,
+});
+
 const app = new Elysia()
   // An unexpected failure answers with a generic error and logs the detail
   // server-side, so raw exception messages never reach a client. Validation,
@@ -275,6 +290,14 @@ const app = new Elysia()
   // headers authenticated by a shared service key; everything else reads the
   // session cookie as before
   .derive(async ({ cookie, headers }) => {
+    // a managed API key (Authorization: Bearer sgk_...) acts as its owner. A
+    // presented bearer never falls back to the cookie, so a bad or revoked key
+    // is plainly unauthenticated rather than riding a browser session
+    const authorization = headers.authorization;
+    if (authorization?.toLowerCase().startsWith("bearer ")) {
+      const key = authorization.slice("bearer ".length).trim();
+      return { session: hasDb ? await resolveApiKey(getDb(), key) : null };
+    }
     const ownerId = headers["x-signet-owner-id"];
     if (
       SERVICE_KEY &&
@@ -298,6 +321,13 @@ const app = new Elysia()
           ? await verifySession(token, authConfig.sessionSecret)
           : null,
     };
+  })
+  .onBeforeHandle(({ session, set }) => {
+    if (session?.apiKeyId && !apiKeyLimiter.take(session.apiKeyId)) {
+      set.status = 429;
+      set.headers["retry-after"] = "60";
+      return { ok: false, error: "rate_limited" };
+    }
   })
   .get("/", ({ session }) =>
     html(landingPage(authEnabled ? authBar(session?.email) : "")),
@@ -1604,6 +1634,64 @@ if (hasDb) {
           return { error: "unauthorized" };
         }
         return listTemplates(db, session.sub);
+      })
+      // managed API keys. Only an interactive session can list, issue or
+      // revoke keys, so a leaked key cannot mint more keys or lock out others
+      .get("/api/keys", async ({ session, set }) => {
+        if (!session) {
+          set.status = 401;
+          return { error: "unauthorized" };
+        }
+        if (session.apiKeyId) {
+          set.status = 403;
+          return { error: "interactive_session_required" };
+        }
+        return { keys: await listApiKeys(db, session.sub) };
+      })
+      .post(
+        "/api/keys",
+        async ({ session, body, set }) => {
+          if (!session) {
+            set.status = 401;
+            return { ok: false, error: "unauthorized" };
+          }
+          if (session.apiKeyId) {
+            set.status = 403;
+            return { ok: false, error: "interactive_session_required" };
+          }
+          const result = await createApiKey(
+            db,
+            {
+              sub: session.sub,
+              email: session.email,
+              organizationId: session.organizationId,
+            },
+            body.name,
+          );
+          if (!result.ok) {
+            set.status = 400;
+            return result;
+          }
+          set.status = 201;
+          return result;
+        },
+        { body: t.Object({ name: t.String() }) },
+      )
+      .delete("/api/keys/:id", async ({ params, session, set }) => {
+        if (!session) {
+          set.status = 401;
+          return { ok: false, error: "unauthorized" };
+        }
+        if (session.apiKeyId) {
+          set.status = 403;
+          return { ok: false, error: "interactive_session_required" };
+        }
+        const ok = await revokeApiKey(db, session.sub, params.id);
+        if (!ok) {
+          set.status = 404;
+          return { ok: false, error: "not_found" };
+        }
+        return { ok: true };
       })
       // send one template to many recipients: each row becomes its own sent
       // document, its signers filling the template's roles in order
