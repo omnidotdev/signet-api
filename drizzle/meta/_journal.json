@@ -134,6 +134,13 @@
       "when": 1794547381439,
       "tag": "0018_thick_longshot",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1794559484536,
+      "tag": "0019_steady_magma",
+      "breakpoints": true
     }
   ]
 }

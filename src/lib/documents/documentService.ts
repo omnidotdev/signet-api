@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { and, asc, desc, eq, inArray, lt, ne, or } from "drizzle-orm";
+import { PDFDocument } from "pdf-lib";
 import type { Db } from "../db/client.ts";
 import type { TemplateField } from "../db/schema.ts";
 import { document, field, signatureEvent, signer } from "../db/schema.ts";
@@ -479,6 +480,12 @@ export interface DocumentDetail {
   id: string;
   name: string;
   status: string;
+  /** 1 for an original document, higher for each revision */
+  version: number;
+  /** the version this one revises, null for an original */
+  previousVersionId: string | null;
+  /** the newer version that revises this one, null when it is the latest */
+  nextVersionId: string | null;
   createdAt: string;
   signingMode: string;
   hasSignedPdf: boolean;
@@ -576,10 +583,19 @@ export const getDocumentDetailForOwner = async (
     hash: r.hash,
   }));
 
+  const [next] = await db
+    .select({ id: document.id })
+    .from(document)
+    .where(eq(document.previousVersionId, id))
+    .limit(1);
+
   return {
     id: doc.id,
     name: doc.name,
     status: doc.status,
+    version: doc.version,
+    previousVersionId: doc.previousVersionId,
+    nextVersionId: next?.id ?? null,
     createdAt: doc.createdAt.toISOString(),
     signingMode: doc.signingMode,
     hasSignedPdf: doc.signedPdf !== null || doc.signedPdfKey !== null,
@@ -834,6 +850,126 @@ export const renameOwnedDocument = async (
     .where(and(eq(document.id, id), or(...access)))
     .returning({ id: document.id });
   return updated.length > 0 ? trimmed : null;
+};
+
+export interface ReviseInput {
+  id: string;
+  ownerId: string;
+  workspaceIds: string[];
+  /** the new version's PDF (already normalized from any upload format) */
+  pdf: Uint8Array;
+}
+
+export type ReviseResult =
+  | { ok: true; draft: DraftRequest; voidedPrevious: boolean }
+  | {
+      ok: false;
+      error: "not_found" | "draft_edit_instead" | "already_revised";
+    };
+
+/**
+ * Start a new version of a sent, completed, declined or voided document from a
+ * new PDF. A signed document is never edited: the new version is a fresh draft
+ * linked to the old one (`previousVersionId`, `version + 1`) that keeps the same
+ * signers, order, signing mode, verification level, and field layout, for the
+ * sender to review in the editor and send. A document still out for signature
+ * is voided first, recorded in its audit trail, so no one keeps signing a stale
+ * version; a completed one stays sealed and untouched as the record of what was
+ * signed. Fields on pages the new PDF does not have are dropped. Drafts are
+ * edited in place instead, and a version can be revised once, keeping history
+ * linear.
+ */
+export const reviseOwnedDocument = async (
+  db: Db,
+  input: ReviseInput,
+): Promise<ReviseResult> => {
+  const [doc] = await db
+    .select()
+    .from(document)
+    .where(
+      and(
+        eq(document.id, input.id),
+        ownerAccess(input.ownerId, input.workspaceIds),
+      ),
+    );
+  if (!doc) return { ok: false, error: "not_found" };
+  if (doc.status === "draft") return { ok: false, error: "draft_edit_instead" };
+  const [existing] = await db
+    .select({ id: document.id })
+    .from(document)
+    .where(eq(document.previousVersionId, doc.id))
+    .limit(1);
+  if (existing) return { ok: false, error: "already_revised" };
+
+  const signers = await db
+    .select()
+    .from(signer)
+    .where(eq(signer.documentId, doc.id))
+    .orderBy(asc(signer.orderIndex));
+  const roleOf = new Map(signers.map((s, i) => [s.id, i]));
+  const pageCount = (await PDFDocument.load(input.pdf)).getPageCount();
+  const oldFields = await db
+    .select()
+    .from(field)
+    .where(eq(field.documentId, doc.id));
+  const carried: TemplateField[] = oldFields
+    .filter((f) => f.page <= pageCount)
+    .map((f) => ({
+      type: f.type,
+      page: f.page,
+      x: f.x,
+      y: f.y,
+      width: f.width,
+      height: f.height,
+      role: f.signerId ? (roleOf.get(f.signerId) ?? 0) : 0,
+      options: parseFieldOptions(f.options),
+      required: f.required,
+      groupId: f.groupId,
+      dateFormat: f.dateFormat,
+      color: f.color,
+    }));
+
+  // create and link the new version before touching the old one, so a failure
+  // part way leaves the original exactly as it was
+  const draft = await createDraft(db, {
+    name: doc.name,
+    pdf: input.pdf,
+    signers: signers.map((s) => ({
+      name: s.name,
+      email: s.email ?? undefined,
+      accessCode: s.accessCode ?? undefined,
+    })),
+    signingMode: doc.signingMode === "sequential" ? "sequential" : "parallel",
+    verificationLevel:
+      doc.verificationLevel === "email_otp" ? "email_otp" : "none",
+    ownerId: doc.ownerId ?? undefined,
+    ownerEmail: doc.ownerEmail ?? undefined,
+    organizationId: doc.organizationId ?? undefined,
+    // nothing carries over (e.g. a document sent with no fields): detect afresh
+    fields: carried.length > 0 ? carried : undefined,
+  });
+  await db
+    .update(document)
+    .set({ previousVersionId: doc.id, version: doc.version + 1 })
+    .where(eq(document.id, draft.id));
+  await appendProvenance(db, draft.id, {
+    type: "document.revised",
+    data: { previousVersionId: doc.id, version: doc.version + 1 },
+  });
+
+  const voidedPrevious = doc.status === "sent";
+  if (voidedPrevious) {
+    await db
+      .update(document)
+      .set({ status: "voided", updatedAt: new Date() })
+      .where(eq(document.id, doc.id));
+    await appendProvenance(db, doc.id, {
+      type: "document.voided",
+      data: { reason: "replaced by a new version", nextVersionId: draft.id },
+    });
+    emitDocumentVoided({ documentId: doc.id, ownerId: doc.ownerId });
+  }
+  return { ok: true, draft, voidedPrevious };
 };
 
 /**

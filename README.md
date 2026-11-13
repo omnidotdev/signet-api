@@ -73,6 +73,15 @@ becomes its own sent document. All rows are validated before anything is
 created; a batch with an invalid row is rejected whole (`invalid_rows`, with
 the row indexes).
 
+### Document versions
+
+A signed document is never edited. To change a contract, upload the new file to
+`POST /api/documents/:id/revise` (multipart `file`). This creates the next
+version as a draft, linked to the previous one, with the same signers, order,
+settings, and field layout, to review and send. A document still out for
+signature is voided first; a completed one is kept unchanged as the record of
+what was signed.
+
 ## Try it
 
 ```sh

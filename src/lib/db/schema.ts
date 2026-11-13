@@ -1,3 +1,4 @@
+import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import {
   boolean,
   doublePrecision,
@@ -35,6 +36,17 @@ export const document = pgTable("document", {
    * one-time code emailed to the signer must be entered first)
    */
   verificationLevel: text("verification_level").notNull().default("none"),
+  /** 1 for an original document; each revision is one higher */
+  version: integer("version").notNull().default(1),
+  /**
+   * the version this document revises, when it is a new version of an earlier
+   * document; the earlier one is kept untouched (voided first if it was still
+   * out for signature)
+   */
+  previousVersionId: uuid("previous_version_id").references(
+    (): AnyPgColumn => document.id,
+    { onDelete: "set null" },
+  ),
   /** when the draft was sent, the baseline for reminder timing */
   sentAt: timestamp("sent_at", { withTimezone: true }),
   /** Gatekeeper subject of the signed-in sender, null for anonymous sends */
