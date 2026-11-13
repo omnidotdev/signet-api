@@ -56,6 +56,17 @@ describe("ensurePdf", () => {
     expect(isPdf(await ensurePdf(bytes(JPEG_1X1)))).toBe(true);
   });
 
+  test("a corrupt image is an unsupported upload, not a crash", async () => {
+    // valid PNG magic and header tag, then garbage
+    const corrupt = new Uint8Array([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48,
+      0x44, 0x52, 1, 2, 3, 4, 5, 6, 7, 8,
+    ]);
+    await expect(ensurePdf(corrupt)).rejects.toBeInstanceOf(
+      UnsupportedUploadError,
+    );
+  });
+
   test("rejects an unrecognized format", async () => {
     const junk = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]);
     await expect(ensurePdf(junk)).rejects.toBeInstanceOf(

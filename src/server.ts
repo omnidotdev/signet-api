@@ -256,6 +256,20 @@ const notifyAfterDecline = (
 const SERVICE_KEY = process.env.SIGNET_SERVICE_KEY;
 
 const app = new Elysia()
+  // An unexpected failure answers with a generic error and logs the detail
+  // server-side, so raw exception messages never reach a client. Validation,
+  // not-found, and deliberate statuses keep their own responses
+  .onError(({ code, error, request, set }) => {
+    if (code !== "UNKNOWN" && code !== "INTERNAL_SERVER_ERROR") return;
+    console.error(
+      "[signet] unhandled error",
+      request.method,
+      new URL(request.url).pathname,
+      error,
+    );
+    set.status = 500;
+    return { ok: false, error: "internal_error" };
+  })
   // Resolve the signed-in sender. The signet-app front end proxies signed-in
   // requests server-to-server with no cookie, passing the user's identity in
   // headers authenticated by a shared service key; everything else reads the

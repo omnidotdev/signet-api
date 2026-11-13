@@ -17,6 +17,12 @@ export const getDb = (): Db => {
     throw new Error("DATABASE_URL not set");
   }
   pool = new Pool({ connectionString: url });
+  // an idle pooled connection dies when Postgres restarts or fails over (e.g. a
+  // CNPG switchover sends 57P01); the pool discards it and reconnects on the
+  // next query, but an unhandled "error" event would crash the whole process
+  pool.on("error", (err) => {
+    console.warn("[signet] idle database connection lost", err.message);
+  });
   db = drizzle(pool, { schema });
   return db;
 };
