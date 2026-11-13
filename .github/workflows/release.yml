@@ -33,12 +33,13 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
       - name: Create release PR or tag package
-        # action@v1 is the release that targets Changesets CLI v2 (pinned in this
-        # repo); action@v2 requires CLI v3 and rejects these inputs
-        uses: changesets/action@v1
+        # action@v2 targets Changesets CLI v3 (pinned in this repo) and renames
+        # the v1 inputs: publish -> publish-script, title -> pr-title,
+        # commit -> commit-message. Keep the action and CLI majors in lockstep
+        uses: changesets/action@v2.1.2
         with:
-          publish: bun run release
-          title: "feature(release): version packages"
-          commit: "ci(changesets): version packages"
+          publish-script: bun run release
+          pr-title: "feature(release): version packages"
+          commit-message: "ci(changesets): version packages"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
