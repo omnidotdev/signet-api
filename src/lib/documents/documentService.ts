@@ -879,6 +879,42 @@ export type ReviseResult =
  * edited in place instead, and a version can be revised once, keeping history
  * linear.
  */
+/**
+ * Detected fields that do not overlap any already-placed field, each given to
+ * the role of the nearest placed signature or initials on its page, so a date
+ * beside a signature goes to that signer (the first role when the page has no
+ * placed signature)
+ */
+export const newlyDetectedFields = (
+  placed: TemplateField[],
+  detected: DetectedField[],
+): TemplateField[] => {
+  const overlaps = (a: DetectedField, b: TemplateField) =>
+    a.page === b.page &&
+    a.x < b.x + b.width &&
+    b.x < a.x + a.width &&
+    a.y < b.y + b.height &&
+    b.y < a.y + a.height;
+  const anchors = placed.filter(
+    (f) => f.type === "signature" || f.type === "initials",
+  );
+  return detected
+    .filter((d) => !placed.some((p) => overlaps(d, p)))
+    .map((d) => {
+      let role = 0;
+      let best = Number.POSITIVE_INFINITY;
+      for (const a of anchors) {
+        if (a.page !== d.page) continue;
+        const dist = Math.hypot(a.x - d.x, a.y - d.y);
+        if (dist < best) {
+          best = dist;
+          role = a.role ?? 0;
+        }
+      }
+      return { ...d, role };
+    });
+};
+
 export const reviseOwnedDocument = async (
   db: Db,
   input: ReviseInput,
@@ -929,6 +965,13 @@ export const reviseOwnedDocument = async (
       color: f.color,
     }));
 
+  // the new file may have blanks the old version never had a field for (or
+  // that an older detector missed), so add each detected field that does not
+  // overlap a carried one; the sender reviews all of them in the draft
+  const placed = carried.concat(
+    newlyDetectedFields(carried, await detectFields(input.pdf)),
+  );
+
   // create and link the new version before touching the old one, so a failure
   // part way leaves the original exactly as it was
   const draft = await createDraft(db, {
@@ -945,8 +988,8 @@ export const reviseOwnedDocument = async (
     ownerId: doc.ownerId ?? undefined,
     ownerEmail: doc.ownerEmail ?? undefined,
     organizationId: doc.organizationId ?? undefined,
-    // nothing carries over (e.g. a document sent with no fields): detect afresh
-    fields: carried.length > 0 ? carried : undefined,
+    // nothing to place at all: let the draft detect afresh
+    fields: placed.length > 0 ? placed : undefined,
   });
   await db
     .update(document)

@@ -233,6 +233,70 @@ describe("revising a document with a new version", () => {
     ).toEqual({ ok: false, error: "already_revised" });
   });
 
+  test("blanks the old version had no field for are detected and paired to the nearest signer", async () => {
+    // an older document sent with signature fields only, on a page whose lines
+    // read "______ Date: ______" (signature and date blank in one run)
+    const lines = async () => {
+      const doc = await PDFDocument.create();
+      const font = await doc.embedFont(StandardFonts.Helvetica);
+      const page = doc.addPage([612, 792]);
+      for (const y of [490, 425]) {
+        page.drawText(
+          "________________________________________ Date: ______________",
+          { x: 72, y, size: 11, font },
+        );
+      }
+      return doc.save();
+    };
+    const v1 = await createMultiSignerRequest(db, {
+      name: "Operating agreement",
+      pdf: await lines(),
+      signers: [{ name: "Ada" }, { name: "Grace" }],
+      ownerId: OWNER,
+    });
+    const v1Signers = await signersOf(v1.id);
+    // keep only the signatures, as the older detector produced
+    await db.delete(field).where(eq(field.type, "date"));
+    const v1Fields = await db
+      .select()
+      .from(field)
+      .where(eq(field.documentId, v1.id));
+    expect(v1Fields.map((f) => f.type)).toEqual(["signature", "signature"]);
+
+    const result = await reviseOwnedDocument(db, {
+      id: v1.id,
+      ownerId: OWNER,
+      workspaceIds: [],
+      pdf: await lines(),
+    });
+    if (!result.ok) throw new Error(result.error);
+    const nextSigners = await signersOf(result.draft.id);
+    const nameOf = new Map(nextSigners.map((s) => [s.id, s.name]));
+    const next = await db
+      .select()
+      .from(field)
+      .where(eq(field.documentId, result.draft.id));
+    const at = (type: string, y: number) =>
+      next.find((f) => f.type === type && Math.abs(f.y - y) < 2);
+    // the signatures carry over untouched, with no duplicate on top of them
+    expect(next.filter((f) => f.type === "signature")).toHaveLength(2);
+    expect(next.filter((f) => f.type === "date")).toHaveLength(2);
+    // each date belongs to the signer of the signature on its line
+    for (const y of [490, 425]) {
+      expect(nameOf.get(at("date", y)?.signerId ?? "")).toBe(
+        nameOf.get(at("signature", y)?.signerId ?? ""),
+      );
+    }
+    const oldNameOf = new Map(v1Signers.map((s) => [s.id, s.name]));
+    const oldSigAt = (y: number) =>
+      oldNameOf.get(
+        v1Fields.find((f) => Math.abs(f.y - y) < 2)?.signerId ?? "",
+      );
+    expect(nameOf.get(at("signature", 490)?.signerId ?? "")).toBe(
+      oldSigAt(490),
+    );
+  });
+
   test("only the owner can revise", async () => {
     const v1 = await sent();
     expect(
