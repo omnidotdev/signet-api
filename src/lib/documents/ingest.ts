@@ -74,12 +74,28 @@ export const ensurePdf = async (
   filename?: string,
 ): Promise<Uint8Array> => {
   if (isPdf(bytes)) return bytes;
-  if (isPng(bytes)) return imageToPdf(bytes, "png");
-  if (isJpeg(bytes)) return imageToPdf(bytes, "jpeg");
+  if (isPng(bytes)) return converted(() => imageToPdf(bytes, "png"));
+  if (isJpeg(bytes)) return converted(() => imageToPdf(bytes, "jpeg"));
   if (isZip(bytes) && filename?.toLowerCase().endsWith(".docx")) {
     if (!isOfficeConverterAvailable())
       throw new UnsupportedUploadError("docx conversion not available");
-    return convertOfficeToPdf(bytes, "docx");
+    return converted(() => convertOfficeToPdf(bytes, "docx"));
   }
   throw new UnsupportedUploadError();
+};
+
+/**
+ * Run a conversion, treating any failure (a truncated or corrupt image, a DOCX
+ * the converter cannot open) as an unsupported upload: the sender gets a clean
+ * "unsupported format" answer and the technical detail stays in the server log
+ */
+const converted = async (
+  run: () => Promise<Uint8Array>,
+): Promise<Uint8Array> => {
+  try {
+    return await run();
+  } catch (err) {
+    console.warn("[signet] upload conversion failed", err);
+    throw new UnsupportedUploadError("the uploaded file could not be read");
+  }
 };

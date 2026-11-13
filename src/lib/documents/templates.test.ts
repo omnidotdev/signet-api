@@ -265,4 +265,12 @@ describe("templates", () => {
       "long",
     );
   });
+
+  test("a malformed template id is simply not found", async () => {
+    expect(
+      await createDraftFromTemplate(db, "not-a-uuid", "owner-1", [
+        { name: "A" },
+      ]),
+    ).toEqual({ ok: false, error: "not_found" });
+  });
 });

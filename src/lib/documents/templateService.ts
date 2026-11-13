@@ -19,6 +19,8 @@ import {
   sendOwnedDraft,
 } from "./documentService.ts";
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 /** A template saved before roles existed has a single signer role */
 const LEGACY_ROLES = ["Signer 1"];
 
@@ -161,6 +163,9 @@ const ownedTemplate = async (
   templateId: string,
   ownerId: string,
 ): Promise<Template | null> => {
+  // a malformed id can match nothing; answer not-found instead of letting the
+  // database reject the uuid cast
+  if (!UUID.test(templateId)) return null;
   const [tpl] = await db
     .select()
     .from(template)
