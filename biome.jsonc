@@ -7,7 +7,14 @@
   },
   "files": {
     "ignoreUnknown": false,
-    "includes": ["**", "!drizzle", "!src/scripts", "!LICENSE.md", "!.changeset"]
+    "includes": [
+      "**",
+      "!drizzle",
+      "!src/scripts",
+      "!LICENSE.md",
+      "!.changeset",
+      "!CHANGELOG.md"
+    ]
   },
   "formatter": {
     "indentStyle": "space",
