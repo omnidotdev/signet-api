@@ -69,6 +69,7 @@ import {
 import { sendCompletionEmail } from "./lib/email/completionEmail.ts";
 import { sendDeclineEmail } from "./lib/email/declineEmail.ts";
 import { sendSignatureRequestEmail } from "./lib/email/signatureRequestEmail.ts";
+import { parseSignersField } from "./lib/http/signersField.ts";
 import { runReminders } from "./lib/reminders/reminderJob.ts";
 import {
   getUserSignature,
@@ -131,6 +132,13 @@ const authEnabled = authConfig !== null;
 const secureCookies = baseUrl.startsWith("https");
 
 const SESSION_COOKIE = "signet_session";
+
+// the signers of a multipart create request: sent as a JSON string, but Elysia
+// may hand it over already parsed, so accept either (see parseSignersField)
+const SIGNERS_FIELD = t.Union([
+  t.String(),
+  t.Array(t.Record(t.String(), t.Unknown())),
+]);
 
 // uploads a sender can turn into a signable PDF; the bytes are verified by magic
 // number in ensurePdf, this is only the first-pass MIME gate (DOCX fidelity needs
@@ -465,30 +473,7 @@ if (hasDb) {
         // Multi-signer send: a JSON `signers` array ([{name,email?}]) takes
         // precedence. Each party is auto-assigned their own signing line and
         // emailed their link (sequential sends email only the first signer now)
-        let parsedSigners: {
-          name: string;
-          email?: string;
-          accessCode?: string;
-        }[] = [];
-        if (body.signers) {
-          try {
-            parsedSigners = (
-              JSON.parse(body.signers) as {
-                name?: string;
-                email?: string;
-                accessCode?: string;
-              }[]
-            )
-              .map((s) => ({
-                name: (s.name ?? "").trim(),
-                email: s.email?.trim() || undefined,
-                accessCode: s.accessCode?.trim() || undefined,
-              }))
-              .filter((s) => s.name);
-          } catch {
-            parsedSigners = [];
-          }
-        }
+        let parsedSigners = parseSignersField(body.signers);
         if (parsedSigners.length === 0 && body.signerName) {
           parsedSigners = [
             { name: body.signerName, email: body.signerEmail || undefined },
@@ -554,7 +539,7 @@ if (hasDb) {
           signerName: t.Optional(t.String()),
           signerEmail: t.Optional(t.String()),
           // preferred: a JSON array of { name, email? }
-          signers: t.Optional(t.String()),
+          signers: t.Optional(SIGNERS_FIELD),
           signingMode: t.Optional(t.String()),
           // "email_otp" to require signers to verify by one-time code
           verificationLevel: t.Optional(t.String()),
@@ -1076,21 +1061,10 @@ if (hasDb) {
           throw e;
         }
         const documentName = body.name || body.file.name || "Document";
-        let signers: { name: string; email?: string }[] = [];
-        try {
-          const parsed = JSON.parse(body.signers) as {
-            name?: string;
-            email?: string;
-          }[];
-          signers = parsed
-            .filter((s) => s.name?.trim())
-            .map((s) => ({
-              name: s.name as string,
-              email: s.email || undefined,
-            }));
-        } catch {
-          signers = [];
-        }
+        const signers = parseSignersField(body.signers).map((s) => ({
+          name: s.name,
+          email: s.email,
+        }));
         if (signers.length === 0) {
           set.status = 400;
           return { error: "at_least_one_signer" };
@@ -1117,7 +1091,7 @@ if (hasDb) {
         body: t.Object({
           file: UPLOAD_FILE,
           name: t.Optional(t.String()),
-          signers: t.String(),
+          signers: SIGNERS_FIELD,
           signingMode: t.Optional(t.String()),
           verificationLevel: t.Optional(t.String()),
         }),
