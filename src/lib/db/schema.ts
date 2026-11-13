@@ -1,6 +1,7 @@
 import {
   boolean,
   doublePrecision,
+  index,
   integer,
   jsonb,
   pgTable,
@@ -195,7 +196,38 @@ export const userSignature = pgTable("user_signature", {
     .defaultNow(),
 });
 
+/**
+ * A managed API key an owner issues for programmatic access (server-to-server
+ * sending). Only a SHA-256 hash of the secret is stored; the secret is shown
+ * once at creation. A key acts as its owner, scoped to the workspace that was
+ * active when it was issued, until it is revoked.
+ */
+export const apiKey = pgTable(
+  "api_key",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    /** Gatekeeper subject of the owner the key acts as */
+    ownerId: text("owner_id").notNull(),
+    ownerEmail: text("owner_email"),
+    /** workspace the key is scoped to, stamped on documents it creates */
+    organizationId: text("organization_id"),
+    name: text("name").notNull(),
+    /** the first characters of the secret, shown so a key can be recognized */
+    prefix: text("prefix").notNull(),
+    /** hex SHA-256 of the full secret; lookups go through this */
+    keyHash: text("key_hash").notNull().unique(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+    /** set when revoked; a revoked key never authenticates again */
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+  },
+  (t) => [index("api_key_owner_idx").on(t.ownerId)],
+);
+
 export type Document = typeof document.$inferSelect;
+export type ApiKey = typeof apiKey.$inferSelect;
 export type Field = typeof field.$inferSelect;
 export type Signer = typeof signer.$inferSelect;
 export type SignatureEventRow = typeof signatureEvent.$inferSelect;
