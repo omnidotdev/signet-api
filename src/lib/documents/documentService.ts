@@ -15,6 +15,7 @@ import {
 import { formatDate } from "../fields/dateFormat.ts";
 import type { DetectedField } from "../fields/detect.ts";
 import { detectFields } from "../fields/detect.ts";
+import { signatureFontOrNull } from "../fields/signatureFonts.ts";
 import { initialsOf, stampFields } from "../fields/stamp.ts";
 import type { ProvenanceEvent } from "../provenance/ledger.ts";
 import { appendEvent, verifyLedger } from "../provenance/ledger.ts";
@@ -2200,6 +2201,11 @@ const fieldValueFor = (type: string, adopted: string, date: string): string => {
 export interface SignOptions {
   /** base64 PNG of a drawn signature, stamped into signature/initials fields */
   signatureImage?: string | null;
+  /**
+   * handwriting style for a typed signature (see signatureFonts); anything
+   * unrecognized is stored as null, the classic style
+   */
+  signatureFont?: string | null;
   /** per-field text the signer typed, keyed by field id */
   textValues?: Record<string, string>;
   /** the signer affirmed the electronic-records (ESIGN / UETA) consent */
@@ -2329,6 +2335,10 @@ export const signByToken = async (
       status: "signed",
       signedAt: new Date(),
       signatureImage: options?.signatureImage ?? null,
+      // a drawn signature carries its own look; the style only shapes typing
+      signatureFont: options?.signatureImage
+        ? null
+        : signatureFontOrNull(options?.signatureFont),
     })
     .where(eq(signer.id, sgn.id));
   await appendProvenance(db, doc.id, {
@@ -2369,6 +2379,7 @@ export const signByToken = async (
       .where(eq(field.documentId, doc.id));
     // a signature/initials field uses its signer's drawn image when they drew one
     const imageBySigner = new Map(signers.map((s) => [s.id, s.signatureImage]));
+    const fontBySigner = new Map(signers.map((s) => [s.id, s.signatureFont]));
     const items = allFields.map((f) => {
       const drawn =
         (f.type === "signature" || f.type === "initials") && f.signerId
@@ -2385,6 +2396,10 @@ export const signByToken = async (
         image: drawn ? fromBase64(drawn) : null,
         options: parseFieldOptions(f.options),
         color: f.color,
+        font:
+          (f.type === "signature" || f.type === "initials") && f.signerId
+            ? (fontBySigner.get(f.signerId) ?? null)
+            : null,
       };
     });
     const original = await loadPdf(doc.originalPdf, doc.originalPdfKey);
