@@ -1,5 +1,34 @@
 # @omnidotdev/signet-api
 
+## 0.6.0
+
+### Minor Changes
+
+- [#94](https://github.com/omnidotdev/signet-api/pull/94) [`aa47c63`](https://github.com/omnidotdev/signet-api/commit/aa47c63bfeda53d2b7412dede245b67a294791ad) Thanks [@coopbri](https://github.com/coopbri)! - Add document versions. `POST /api/documents/:id/revise` takes a new file (PDF,
+  image, or Word) for a sent, completed, declined, or voided document and creates
+  the next version as a draft linked to it, with the same signers, order, signing
+  mode, verification setting, and field layout, ready to review and send. A
+  document still out for signature is voided first (recorded in its audit trail);
+  a completed one is never changed, so it remains the record of what was signed.
+  Fields on pages the new file no longer has are dropped. Document details now
+  include the version number and links to the previous and next versions.
+
+### Patch Changes
+
+- [#91](https://github.com/omnidotdev/signet-api/pull/91) [`43ff05b`](https://github.com/omnidotdev/signet-api/commit/43ff05bfb54b895f58e3124e503f755f30dd60ed) Thanks [@coopbri](https://github.com/coopbri)! - Size handwriting signatures to match the classic style. Script faces have very
+  different letter proportions (the flowing face's lowercase is about half the
+  height of the handwritten face's at the same point size), and a typed
+  signature in a handwriting style was stamped smaller than the classic one, in
+  places smaller than the date beside it. Each face is now sized from its own
+  x-height so its lowercase stands as tall as the classic signature's, still
+  shrinking to fit the field's width.
+
+- [#93](https://github.com/omnidotdev/signet-api/pull/93) [`21a2903`](https://github.com/omnidotdev/signet-api/commit/21a29037601e337f282c8921d5bac06981ef6d14) Thanks [@coopbri](https://github.com/coopbri)! - Give each signer the date next to their own signature in side-by-side signature
+  blocks. When a document is sent without placing fields by hand, dates were paired
+  to signatures by height alone, so every date on a two-column signing line went
+  to the first signer and was filled in when they signed, even if the other party
+  signed days later. Dates now go to the nearest signature by true distance.
+
 ## 0.5.0
 
 ### Minor Changes
