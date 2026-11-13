@@ -13,6 +13,11 @@ export interface CertificateSigner {
   ip: string | null;
   /** browser user-agent captured when the signer signed, for the audit trail */
   userAgent: string | null;
+  /**
+   * how the signer's identity was assured before signing, when the document
+   * required it (e.g. a one-time code emailed to them), or null if not required
+   */
+  verification: { method: string; verifiedAt: string } | null;
 }
 
 /** Everything the certificate of completion renders, assembled from the ledger */
@@ -189,7 +194,7 @@ export const buildCompletionCertificate = async (
   text("SIGNERS", MARGIN, 9, bold, MUTED);
   y -= 20;
   for (const s of data.signers) {
-    ensure(92);
+    ensure(105);
     for (const line of wrap(s.name, 12, bold, PAGE_W - 2 * MARGIN)) {
       text(line, MARGIN, 12, bold);
       y -= 15;
@@ -216,6 +221,17 @@ export const buildCompletionCertificate = async (
       MUTED,
     );
     y -= 14;
+    // identity assurance: how the signer proved who they are before signing
+    if (s.verification?.method === "email_otp") {
+      text(
+        `Identity verified by emailed one-time code ${fmt(s.verification.verifiedAt)}`,
+        MARGIN,
+        9,
+        font,
+        MUTED,
+      );
+      y -= 13;
+    }
     // audit-trail network identity: where the signature originated. Only shown
     // once the signer has actually signed (older records may lack it)
     if (s.signedAt && (s.ip || s.userAgent)) {

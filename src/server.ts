@@ -27,6 +27,7 @@ import {
   createMultiSignerRequest,
   declineByToken,
   deleteOwnedDocument,
+  ensureSignerOtp,
   getDocumentDetailForOwner,
   getDocumentFileForOwner,
   getEditorData,
@@ -42,6 +43,7 @@ import {
   removeSignerForOwner,
   removeSignerFromDraft,
   renameOwnedDocument,
+  resendSignerOtp,
   saveFields,
   saveFieldsForOwner,
   sendDraft,
@@ -49,7 +51,9 @@ import {
   signByToken,
   updateDraftSigner,
   updateSignerForOwner,
+  verificationStateFor,
   verifySignerAccess,
+  verifySignerOtp,
   voidDocument,
 } from "./lib/documents/documentService.ts";
 import { resolveMySignToken } from "./lib/documents/signAsMe.ts";
@@ -78,6 +82,7 @@ import {
   notFoundPage,
 } from "./lib/ui/pages.ts";
 import { signerFillPage } from "./lib/ui/signerFillPage.ts";
+import { signerOtpPage } from "./lib/ui/signerOtpPage.ts";
 
 // pdf.js browser build, served to the editor from the service (no CDN)
 const requireFile = createRequire(import.meta.url);
@@ -141,6 +146,24 @@ if (!authEnabled) {
 
 const html = (markup: string) =>
   new Response(markup, { headers: { "content-type": "text/html" } });
+
+/** A 303 redirect, so a form POST lands the browser on a fresh GET (PRG) */
+const seeOther = (location: string) =>
+  new Response(null, { status: 303, headers: { location } });
+
+/** A signer-facing message for a failed one-time-code check */
+const otpErrorMessage = (error?: string): string => {
+  switch (error) {
+    case "expired":
+      return "That code has expired. Resend to get a new one.";
+    case "too_many_attempts":
+      return "Too many attempts. Resend to get a new code.";
+    case "no_code":
+      return "Resend a code to continue.";
+    default:
+      return "That code is not right. Check it and try again.";
+  }
+};
 const pdfResponse = (
   bytes: Uint8Array,
   filename: string,
@@ -446,6 +469,8 @@ if (hasDb) {
           pdf,
           signers: parsedSigners,
           signingMode: sequential ? "sequential" : "parallel",
+          verificationLevel:
+            body.verificationLevel === "email_otp" ? "email_otp" : "none",
           draft,
           ownerId: session?.sub,
           organizationId: session?.organizationId,
@@ -492,6 +517,8 @@ if (hasDb) {
           // preferred: a JSON array of { name, email? }
           signers: t.Optional(t.String()),
           signingMode: t.Optional(t.String()),
+          // "email_otp" to require signers to verify by one-time code
+          verificationLevel: t.Optional(t.String()),
           // "true" to save as an unsent draft instead of sending now
           draft: t.Optional(t.String()),
         }),
@@ -609,6 +636,9 @@ if (hasDb) {
           signatureImage: body?.signatureImage ?? null,
           textValues: body?.textValues ?? {},
           consent: body?.consent ?? false,
+          // the owner is authenticated here, so their identity is already
+          // assured; the email one-time-code gate does not apply
+          identityAssured: true,
           actor: actorFromHeaders(headers, server?.requestIP(request)?.address),
         });
         if (!result.ok) {
@@ -1016,6 +1046,8 @@ if (hasDb) {
           signers,
           signingMode:
             body.signingMode === "sequential" ? "sequential" : "parallel",
+          verificationLevel:
+            body.verificationLevel === "email_otp" ? "email_otp" : "none",
           ownerId: session?.sub,
           organizationId: session?.organizationId,
           ownerEmail: session?.email,
@@ -1032,6 +1064,7 @@ if (hasDb) {
           name: t.Optional(t.String()),
           signers: t.String(),
           signingMode: t.Optional(t.String()),
+          verificationLevel: t.Optional(t.String()),
         }),
       },
     )
@@ -1177,6 +1210,14 @@ if (hasDb) {
         set.status = 401;
         return { locked: true };
       }
+      // identity assurance: a protected signer must verify by one-time code
+      // before any fill data is revealed
+      const ver = await verificationStateFor(db, params.token);
+      if (ver?.required && !ver.verified) {
+        await ensureSignerOtp(db, params.token);
+        set.status = 403;
+        return { verify: true, email: ver.maskedEmail };
+      }
       const data = await getSignerFillData(db, params.token);
       if (!data) {
         set.status = 404;
@@ -1184,14 +1225,83 @@ if (hasDb) {
       }
       return data;
     })
+    // request (or resend) a verification code for the native signer page
+    .post("/api/sign/:token/otp/request", async ({ params, set }) => {
+      const result = await resendSignerOtp(db, params.token);
+      if (!result.ok) {
+        set.status = result.error === "not_found" ? 404 : 409;
+        return { ok: false, error: result.error };
+      }
+      return { ok: true, email: result.maskedEmail };
+    })
+    // verify a submitted code for the native signer page
+    .post(
+      "/api/sign/:token/otp/verify",
+      async ({ params, body, set }) => {
+        const result = await verifySignerOtp(
+          db,
+          params.token,
+          body?.code ?? "",
+        );
+        if (!result.ok) {
+          set.status =
+            result.error === "not_found"
+              ? 404
+              : result.error === "invalid_code"
+                ? 401
+                : 409;
+          return { ok: false, error: result.error };
+        }
+        return { ok: true };
+      },
+      { body: t.Optional(t.Object({ code: t.Optional(t.String()) })) },
+    )
     // signer-facing fill overlay
     .get("/sign/:token", async ({ params }) => {
       if ((await verifySignerAccess(db, params.token)) === "locked")
         return html(notFoundPage());
+      // identity assurance: show the one-time-code screen until verified
+      const ver = await verificationStateFor(db, params.token);
+      if (ver?.required && !ver.verified) {
+        const issued = await ensureSignerOtp(db, params.token);
+        return html(
+          signerOtpPage({
+            token: params.token,
+            maskedEmail: issued.maskedEmail ?? ver.maskedEmail,
+          }),
+        );
+      }
       const data = await getSignerFillData(db, params.token);
       if (!data) return html(notFoundPage());
       return html(signerFillPage(data, params.token));
     })
+    // resend a verification code from the no-JS signer page, then return to it
+    .post("/sign/:token/otp/request", async ({ params }) => {
+      await resendSignerOtp(db, params.token);
+      return seeOther(`/sign/${encodeURIComponent(params.token)}`);
+    })
+    // verify a code from the no-JS signer page: continue on success, else re-ask
+    .post(
+      "/sign/:token/otp/verify",
+      async ({ params, body }) => {
+        const result = await verifySignerOtp(
+          db,
+          params.token,
+          body?.code ?? "",
+        );
+        if (result.ok)
+          return seeOther(`/sign/${encodeURIComponent(params.token)}`);
+        const ver = await verificationStateFor(db, params.token);
+        return html(
+          signerOtpPage({
+            token: params.token,
+            maskedEmail: ver?.maskedEmail ?? null,
+            error: otpErrorMessage(result.error),
+          }),
+        );
+      },
+      { body: t.Optional(t.Object({ code: t.Optional(t.String()) })) },
+    )
     // signer applies their signature (typed name, drawn image, text fields)
     .post(
       "/sign/:token",
@@ -1220,7 +1330,9 @@ if (hasDb) {
                 ? 401
                 : result.error === "consent_required"
                   ? 422
-                  : 409;
+                  : result.error === "verification_required"
+                    ? 403
+                    : 409;
           return { ok: false, error: result.error };
         }
         notifyAfterSign(result);
