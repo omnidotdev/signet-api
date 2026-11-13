@@ -35,7 +35,7 @@ jobs:
       - name: Create release PR or tag package
         # action@v1 is the release that targets Changesets CLI v2 (pinned in this
         # repo); action@v2 requires CLI v3 and rejects these inputs
-        uses: changesets/action@v1
+        uses: changesets/action@v2.1.2
         with:
           publish: bun run release
           title: "feature(release): version packages"
