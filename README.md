@@ -96,6 +96,9 @@ bun run demo    # writes a signed PDF to ~/Downloads/signet-demo
 
 - SMS one-time codes and stronger identity verification tiers
 - An embeddable signing widget
+- TODO: sign with a document-signing certificate from a CA on the Adobe
+  Approved Trust List (paid). Signatures are valid today, but PDF readers show
+  the issuer as unknown because the signing CA is Omni's own
 
 ## License
 
