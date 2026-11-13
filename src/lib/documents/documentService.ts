@@ -12,6 +12,7 @@ import {
   emitDocumentVoided,
   emitSignatureCompleted,
 } from "../events/signetEvents.ts";
+import { formatDate } from "../fields/dateFormat.ts";
 import type { DetectedField } from "../fields/detect.ts";
 import { detectFields } from "../fields/detect.ts";
 import { initialsOf, stampFields } from "../fields/stamp.ts";
@@ -996,6 +997,10 @@ export interface EditorField {
   required?: boolean;
   /** links mutually-exclusive radio buttons into one group */
   groupId?: string | null;
+  /** date style for a date field: iso | us | eu | long */
+  dateFormat?: string | null;
+  /** ink for this field's stamped mark, as #rrggbb */
+  color?: string | null;
 }
 
 /** Parse the stored options JSON (a dropdown/radio field's choices) */
@@ -1080,6 +1085,8 @@ export const getEditorData = async (
       options: parseFieldOptions(f.options),
       required: f.required,
       groupId: f.groupId,
+      dateFormat: f.dateFormat,
+      color: f.color,
     })),
   };
 };
@@ -1120,6 +1127,8 @@ export const saveFields = async (
         options: serializeFieldOptions(f.options),
         required: f.required ?? true,
         groupId: f.groupId ?? null,
+        dateFormat: f.dateFormat ?? null,
+        color: f.color ?? null,
       })),
     );
   }
@@ -1177,6 +1186,8 @@ export const getEditorDataForOwner = async (
       options: parseFieldOptions(f.options),
       required: f.required,
       groupId: f.groupId,
+      dateFormat: f.dateFormat,
+      color: f.color,
     })),
   };
 };
@@ -1222,6 +1233,8 @@ export const saveFieldsForOwner = async (
         options: serializeFieldOptions(f.options),
         required: f.required ?? true,
         groupId: f.groupId ?? null,
+        dateFormat: f.dateFormat ?? null,
+        color: f.color ?? null,
       })),
     );
   }
@@ -1763,6 +1776,10 @@ export interface SignerFillField {
   required?: boolean;
   /** links mutually-exclusive radio buttons into one group */
   groupId?: string | null;
+  /** date style for a date field: iso | us | eu | long */
+  dateFormat?: string | null;
+  /** ink for this field's stamped mark, as #rrggbb */
+  color?: string | null;
 }
 
 export interface SignerFillData {
@@ -2120,6 +2137,8 @@ export const getSignerFillData = async (
       options: field.options,
       required: field.required,
       groupId: field.groupId,
+      dateFormat: field.dateFormat,
+      color: field.color,
     })
     .from(field)
     .where(eq(field.signerId, row.signerId));
@@ -2288,7 +2307,9 @@ export const signByToken = async (
     // editable but defaults to today; the rest derive from the adopted signature
     let value: string;
     if (f.type === "date") {
-      value = typed ?? f.value ?? dateStamp;
+      // render the ISO date through the sender's chosen style (us/eu/long),
+      // leaving a signer's free-typed value untouched
+      value = formatDate(typed ?? f.value ?? dateStamp, f.dateFormat);
     } else if (
       f.type === "text" ||
       f.type === "checkbox" ||
@@ -2363,6 +2384,7 @@ export const signByToken = async (
         value: f.value,
         image: drawn ? fromBase64(drawn) : null,
         options: parseFieldOptions(f.options),
+        color: f.color,
       };
     });
     const original = await loadPdf(doc.originalPdf, doc.originalPdfKey);

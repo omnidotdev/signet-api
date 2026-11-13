@@ -6,6 +6,7 @@
  * so several signers can fill their own fields independently.
  */
 
+import type { RGB } from "pdf-lib";
 import { PDFDocument, rgb, StandardFonts } from "pdf-lib";
 
 export interface StampField {
@@ -22,7 +23,30 @@ export interface StampField {
   image?: Uint8Array | null;
   /** for a radio button, its label is options[0] */
   options?: string[] | null;
+  /** the sender's chosen ink, as #rrggbb; the default ink is used when unset */
+  color?: string | null;
 }
+
+/** The default ink every mark uses unless the sender picked a field color */
+export const DEFAULT_INK = rgb(0.11, 0.18, 0.45);
+
+const HEX_COLOR = /^#?([0-9a-fA-F]{6})$/;
+
+/**
+ * Parse a sender-configured `#rrggbb` field color into a pdf-lib ink, or null
+ * when it is absent or malformed, so the caller falls back to the default ink.
+ */
+export const hexToInk = (hex?: string | null): RGB | null => {
+  if (!hex) return null;
+  const match = HEX_COLOR.exec(hex.trim());
+  if (!match) return null;
+  const n = Number.parseInt(match[1] as string, 16);
+  return rgb(
+    ((n >> 16) & 0xff) / 255,
+    ((n >> 8) & 0xff) / 255,
+    (n & 0xff) / 255,
+  );
+};
 
 /** Initials from a full name: first letter of each word, uppercased */
 export const initialsOf = (name: string): string =>
@@ -62,11 +86,13 @@ export const stampFields = async (
   const pages = doc.getPages();
   const script = await doc.embedFont(StandardFonts.HelveticaOblique);
   const plain = await doc.embedFont(StandardFonts.Helvetica);
-  const ink = rgb(0.11, 0.18, 0.45);
 
   for (const field of toDraw) {
     const page = pages[field.page - 1];
     if (!page) continue;
+
+    // each field draws in the sender's chosen ink, or the default when unset
+    const ink = hexToInk(field.color) ?? DEFAULT_INK;
 
     if (field.type === "checkbox") {
       // a ticked box draws a check mark; an unticked box carries no value and

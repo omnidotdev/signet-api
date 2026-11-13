@@ -129,6 +129,10 @@ export const field = pgTable("field", {
   source: text("source").notNull().default("detected"),
   /** value stamped at sign time (typed signature, date string), null until then */
   value: text("value"),
+  /** sender-chosen date style for a date field: iso | us | eu | long, null = iso */
+  dateFormat: text("date_format"),
+  /** sender-chosen ink for this field's mark, as #rrggbb; null uses the default */
+  color: text("color"),
 });
 
 /** A field position stored on a reusable template */
