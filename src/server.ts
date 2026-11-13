@@ -59,6 +59,8 @@ import {
 import { ensurePdf, UnsupportedUploadError } from "./lib/documents/ingest.ts";
 import { resolveMySignToken } from "./lib/documents/signAsMe.ts";
 import {
+  BULK_SEND_MAX,
+  bulkSendFromTemplate,
   createDraftFromTemplate,
   listTemplates,
   saveTemplateFromDraft,
@@ -1581,7 +1583,7 @@ if (hasDb) {
             set.status = 400;
             return { ok: false, error: "at_least_one_signer" };
           }
-          const draft = await createDraftFromTemplate(
+          const result = await createDraftFromTemplate(
             db,
             body.templateId,
             session.sub,
@@ -1589,10 +1591,11 @@ if (hasDb) {
             session.email,
             session.organizationId,
           );
-          if (!draft) {
-            set.status = 404;
-            return { ok: false };
+          if (!result.ok) {
+            set.status = result.error === "not_found" ? 404 : 400;
+            return { ok: false, error: result.error };
           }
+          const { draft } = result;
           return {
             ok: true,
             draftId: draft.id,
@@ -1614,6 +1617,62 @@ if (hasDb) {
         }
         return listTemplates(db, session.sub);
       })
+      // send one template to many recipients: each row becomes its own sent
+      // document, its signers filling the template's roles in order
+      .post(
+        "/api/templates/:id/bulk-send",
+        async ({ params, session, body, set }) => {
+          if (!session) {
+            set.status = 401;
+            return { ok: false, error: "unauthorized" };
+          }
+          const result = await bulkSendFromTemplate(db, {
+            templateId: params.id,
+            ownerId: session.sub,
+            ownerEmail: session.email,
+            organizationId: session.organizationId,
+            workspaceIds: (session.workspaces ?? []).map((w) => w.id),
+            rows: body.rows,
+          });
+          if (!result.ok) {
+            set.status = result.error === "not_found" ? 404 : 400;
+            return result;
+          }
+          for (const doc of result.sent) {
+            for (const s of doc.signers) {
+              if (!s.active || !s.email) continue;
+              await sendSignatureRequestEmail({
+                to: s.email,
+                signerName: s.name,
+                documentName: doc.documentName,
+                signUrl: `${appBaseUrl}/sign/${s.signToken}`,
+              });
+            }
+          }
+          return {
+            ok: true,
+            sent: result.sent.map((doc) => ({
+              index: doc.index,
+              documentId: doc.documentId,
+              signers: doc.signers.map((s) => ({
+                name: s.name,
+                signUrl: `${appBaseUrl}/sign/${s.signToken}`,
+              })),
+            })),
+            failed: result.failed,
+          };
+        },
+        {
+          body: t.Object({
+            rows: t.Array(
+              t.Array(t.Object({ name: t.String(), email: t.String() }), {
+                minItems: 1,
+              }),
+              { maxItems: BULK_SEND_MAX },
+            ),
+          }),
+        },
+      )
       // save a draft the owner owns as a reusable template
       .post("/api/documents/:id/template", async ({ params, session, set }) => {
         if (!session) {

@@ -943,12 +943,15 @@ export const createDraft = async (
   const firstSigner = signerRows[0];
   // use the template's fields when provided, else auto-detect from the text
   const fromTemplate = input.fields !== undefined;
-  const placed = input.fields ?? (await detectFields(input.pdf));
+  const placed: TemplateField[] =
+    input.fields ?? (await detectFields(input.pdf));
   if (placed.length > 0 && firstSigner) {
     await db.insert(field).values(
       placed.map((f) => ({
         documentId: doc.id,
-        signerId: firstSigner.id,
+        // a template field goes to the signer filling its role; detected
+        // fields (and roleless legacy template fields) go to the first signer
+        signerId: (signerRows[f.role ?? 0] ?? firstSigner).id,
         type: f.type,
         page: f.page,
         x: f.x,
@@ -956,6 +959,11 @@ export const createDraft = async (
         width: f.width,
         height: f.height,
         source: fromTemplate ? "template" : "detected",
+        options: serializeFieldOptions(f.options),
+        required: f.required ?? true,
+        groupId: f.groupId ?? null,
+        dateFormat: f.dateFormat ?? null,
+        color: f.color ?? null,
       })),
     );
   }

@@ -69,12 +69,13 @@ describe("templates", () => {
       "owner-1",
       [{ name: "New Signer" }],
     );
-    expect(fromTpl?.id).toBeString();
+    if (!fromTpl.ok) throw new Error(fromTpl.error);
+    expect(fromTpl.draft.id).toBeString();
 
     const newEditor = await getEditorData(
       db,
-      fromTpl?.id as string,
-      fromTpl?.manageToken as string,
+      fromTpl.draft.id,
+      fromTpl.draft.manageToken,
     );
     // the template's two fields are placed and assigned to the signer
     expect(newEditor?.fields).toHaveLength(2);
@@ -127,7 +128,141 @@ describe("templates", () => {
       await createDraftFromTemplate(db, tpl?.id as string, "other-owner", [
         { name: "Y" },
       ]),
-    ).toBeNull();
+    ).toEqual({ ok: false, error: "not_found" });
     expect(await listTemplates(db, "other-owner")).toHaveLength(0);
+  });
+
+  test("a multi-signer template keeps each field with its signer's role", async () => {
+    const draft = await createDraft(db, {
+      name: "Lease",
+      pdf: await tinyPdf(),
+      signers: [{ name: "Tenant Draft" }, { name: "Landlord Draft" }],
+      ownerId: "owner-1",
+    });
+    const editor = await getEditorData(db, draft.id, draft.manageToken);
+    const [tenant, landlord] = editor?.signers ?? [];
+    await saveFields(db, draft.id, draft.manageToken, [
+      {
+        signerId: tenant?.id ?? null,
+        type: "signature",
+        page: 1,
+        x: 72,
+        y: 400,
+        width: 160,
+        height: 18,
+      },
+      {
+        signerId: landlord?.id ?? null,
+        type: "signature",
+        page: 1,
+        x: 300,
+        y: 400,
+        width: 160,
+        height: 18,
+      },
+      {
+        signerId: landlord?.id ?? null,
+        type: "date",
+        page: 1,
+        x: 300,
+        y: 360,
+        width: 90,
+        height: 16,
+      },
+    ]);
+    await saveTemplateFromDraft(db, draft.id, draft.manageToken);
+    const [tpl] = await listTemplates(db, "owner-1");
+    expect(tpl?.roles).toEqual(["Signer 1", "Signer 2"]);
+
+    const started = await createDraftFromTemplate(
+      db,
+      tpl?.id as string,
+      "owner-1",
+      [{ name: "Ada (tenant)" }, { name: "Grace (landlord)" }],
+    );
+    if (!started.ok) throw new Error(started.error);
+    const next = await getEditorData(
+      db,
+      started.draft.id,
+      started.draft.manageToken,
+    );
+    const idByName = new Map(next?.signers.map((s) => [s.name, s.id]));
+    const owner = (x: number, type: string) =>
+      next?.fields.find((f) => f.x === x && f.type === type)?.signerId;
+    expect(owner(72, "signature")).toBe(idByName.get("Ada (tenant)"));
+    expect(owner(300, "signature")).toBe(idByName.get("Grace (landlord)"));
+    expect(owner(300, "date")).toBe(idByName.get("Grace (landlord)"));
+  });
+
+  test("starting a multi-signer template needs a signer for every role", async () => {
+    const draft = await createDraft(db, {
+      name: "Lease",
+      pdf: await tinyPdf(),
+      signers: [{ name: "A" }, { name: "B" }],
+      ownerId: "owner-1",
+    });
+    await saveTemplateFromDraft(db, draft.id, draft.manageToken);
+    const [tpl] = await listTemplates(db, "owner-1");
+    expect(
+      await createDraftFromTemplate(db, tpl?.id as string, "owner-1", [
+        { name: "Only one" },
+      ]),
+    ).toEqual({ ok: false, error: "signers_for_each_role" });
+  });
+
+  test("a template keeps each field's options, requirement and styling", async () => {
+    const draft = await createDraft(db, {
+      name: "Form",
+      pdf: await tinyPdf(),
+      signers: [{ name: "A" }],
+      ownerId: "owner-1",
+    });
+    const editor = await getEditorData(db, draft.id, draft.manageToken);
+    const signerId = editor?.signers[0]?.id ?? null;
+    await saveFields(db, draft.id, draft.manageToken, [
+      {
+        signerId,
+        type: "dropdown",
+        page: 1,
+        x: 72,
+        y: 500,
+        width: 160,
+        height: 18,
+        options: ["Red", "Blue"],
+        required: false,
+        color: "#aa0000",
+      },
+      {
+        signerId,
+        type: "date",
+        page: 1,
+        x: 72,
+        y: 450,
+        width: 90,
+        height: 16,
+        dateFormat: "long",
+      },
+    ]);
+    await saveTemplateFromDraft(db, draft.id, draft.manageToken);
+    const [tpl] = await listTemplates(db, "owner-1");
+    const started = await createDraftFromTemplate(
+      db,
+      tpl?.id as string,
+      "owner-1",
+      [{ name: "B" }],
+    );
+    if (!started.ok) throw new Error(started.error);
+    const next = await getEditorData(
+      db,
+      started.draft.id,
+      started.draft.manageToken,
+    );
+    const dropdown = next?.fields.find((f) => f.type === "dropdown");
+    expect(dropdown?.options).toEqual(["Red", "Blue"]);
+    expect(dropdown?.required).toBe(false);
+    expect(dropdown?.color).toBe("#aa0000");
+    expect(next?.fields.find((f) => f.type === "date")?.dateFormat).toBe(
+      "long",
+    );
   });
 });

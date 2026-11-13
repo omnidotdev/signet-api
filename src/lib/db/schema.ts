@@ -137,7 +137,7 @@ export const field = pgTable("field", {
   color: text("color"),
 });
 
-/** A field position stored on a reusable template */
+/** A field stored on a reusable template: its position plus how it behaves */
 export interface TemplateField {
   type: string;
   page: number;
@@ -145,6 +145,17 @@ export interface TemplateField {
   y: number;
   width: number;
   height: number;
+  /**
+   * which signer role fills the field, as a 0-based index into the template's
+   * roles; absent on templates saved before roles existed (role 0)
+   */
+  role?: number;
+  /** choices for a dropdown or radio field */
+  options?: string[] | null;
+  required?: boolean;
+  groupId?: string | null;
+  dateFormat?: string | null;
+  color?: string | null;
 }
 
 /** A reusable document + field layout an owner can start new documents from */
@@ -155,8 +166,13 @@ export const template = pgTable("template", {
   ownerId: text("owner_id").notNull(),
   /** base64-encoded PDF */
   pdfBase64: text("pdf_base64").notNull(),
-  /** the field layout, applied to the first signer on use */
+  /** the field layout; each field names the signer role that fills it */
   fields: jsonb("fields").notNull().$type<TemplateField[]>(),
+  /**
+   * labels of the signer roles, in signing order ("Signer 1", ...); null on
+   * templates saved before roles existed, which have a single role
+   */
+  roles: jsonb("roles").$type<string[]>(),
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),

@@ -120,6 +120,13 @@
       "when": 1794545270822,
       "tag": "0016_skinny_vertigo",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1794546513977,
+      "tag": "0017_careless_sprite",
+      "breakpoints": true
     }
   ]
 }
