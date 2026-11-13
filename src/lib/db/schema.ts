@@ -28,6 +28,12 @@ export const document = pgTable("document", {
   manageToken: text("manage_token").notNull(),
   /** parallel (any order) | sequential (one signer at a time by orderIndex) */
   signingMode: text("signing_mode").notNull().default("parallel"),
+  /**
+   * identity assurance required of each signer before they may sign:
+   * none (possession of the link, plus any access code) | email_otp (a
+   * one-time code emailed to the signer must be entered first)
+   */
+  verificationLevel: text("verification_level").notNull().default("none"),
   /** when the draft was sent, the baseline for reminder timing */
   sentAt: timestamp("sent_at", { withTimezone: true }),
   /** Gatekeeper subject of the signed-in sender, null for anonymous sends */
@@ -66,6 +72,14 @@ export const signer = pgTable("signer", {
   /** when this signer was last reminded, to rate-limit reminder emails */
   lastReminderAt: timestamp("last_reminder_at", { withTimezone: true }),
   signedAt: timestamp("signed_at", { withTimezone: true }),
+  /** bcrypt hash of the signer's current one-time verification code, if issued */
+  otpCodeHash: text("otp_code_hash"),
+  /** when the current one-time code expires; a code past this is never accepted */
+  otpExpiresAt: timestamp("otp_expires_at", { withTimezone: true }),
+  /** when this signer's identity was verified by one-time code; sticky once set */
+  otpVerifiedAt: timestamp("otp_verified_at", { withTimezone: true }),
+  /** failed attempts against the current code, to lock out brute force */
+  otpAttempts: integer("otp_attempts").notNull().default(0),
 });
 
 /** One tamper-evident provenance event in a document's history */

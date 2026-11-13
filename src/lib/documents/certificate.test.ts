@@ -19,6 +19,10 @@ const sample = (over: Partial<CertificateData> = {}): CertificateData => ({
       consent: true,
       ip: "203.0.113.7",
       userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
+      verification: {
+        method: "email_otp",
+        verifiedAt: "2026-11-02T11:58:00.000Z",
+      },
     },
     {
       name: "Grace Hopper",
@@ -27,6 +31,7 @@ const sample = (over: Partial<CertificateData> = {}): CertificateData => ({
       consent: true,
       ip: "198.51.100.42",
       userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+      verification: null,
     },
   ],
   events: [
@@ -77,6 +82,7 @@ describe("certificate of completion", () => {
       consent: true,
       ip: "203.0.113.7",
       userAgent: "Mozilla/5.0 (TestAgent)",
+      verification: null,
     }));
     const bytes = await buildCompletionCertificate(sample({ signers: many }));
     const parsed = await PDFDocument.load(bytes);
@@ -101,6 +107,29 @@ describe("certificate of completion", () => {
             consent: true,
             ip: null,
             userAgent: null,
+            verification: null,
+          },
+        ],
+      }),
+    );
+    expect(new TextDecoder().decode(bytes.slice(0, 5))).toBe("%PDF-");
+  });
+
+  test("renders a signer verified by a one-time code", async () => {
+    const bytes = await buildCompletionCertificate(
+      sample({
+        signers: [
+          {
+            name: "Ada Lovelace",
+            email: "ada@example.com",
+            signedAt: "2026-11-02T12:00:00.000Z",
+            consent: true,
+            ip: "203.0.113.7",
+            userAgent: "Mozilla/5.0 (TestAgent)",
+            verification: {
+              method: "email_otp",
+              verifiedAt: "2026-11-02T11:58:00.000Z",
+            },
           },
         ],
       }),

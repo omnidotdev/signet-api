@@ -4,6 +4,7 @@ import type { Db } from "../db/client.ts";
 import type { TemplateField } from "../db/schema.ts";
 import { document, field, signatureEvent, signer } from "../db/schema.ts";
 import { generateToken } from "../db/tokens.ts";
+import { sendOtpEmail } from "../email/otpEmail.ts";
 import {
   emitDocumentCompleted,
   emitDocumentCreated,
@@ -28,6 +29,14 @@ import {
 } from "../storage/pdfStore.ts";
 import type { CertificateData } from "./certificate.ts";
 import { buildCompletionCertificate } from "./certificate.ts";
+import {
+  generateOtpCode,
+  hashOtpCode,
+  maskEmail,
+  OTP_MAX_ATTEMPTS,
+  OTP_TTL_MS,
+  verifyOtpCode,
+} from "./otp.ts";
 
 const sha256 = (bytes: Uint8Array): string =>
   createHash("sha256").update(bytes).digest("hex");
@@ -213,6 +222,8 @@ export interface MultiSignerRequestInput {
   signers: DraftSignerInput[];
   /** "sequential" to require signing in order, else "parallel" (any order) */
   signingMode?: "parallel" | "sequential";
+  /** "email_otp" to require signers to verify by one-time code, else "none" */
+  verificationLevel?: "none" | "email_otp";
   /** Gatekeeper subject of the signed-in sender, omitted for anonymous sends */
   ownerId?: string;
   ownerEmail?: string;
@@ -287,6 +298,8 @@ export const createMultiSignerRequest = async (
   const storedOriginal = await storePdf(originalKey(id), input.pdf);
   const signingMode =
     input.signingMode === "sequential" ? "sequential" : "parallel";
+  const verificationLevel =
+    input.verificationLevel === "email_otp" ? "email_otp" : "none";
   const isDraft = input.draft === true;
 
   const [doc] = await db
@@ -300,6 +313,7 @@ export const createMultiSignerRequest = async (
       originalPdfKey: storedOriginal.key,
       manageToken,
       signingMode,
+      verificationLevel,
       ownerId: input.ownerId ?? null,
       organizationId: input.organizationId ?? null,
       ownerEmail: input.ownerEmail ?? null,
@@ -602,6 +616,10 @@ const assembleCertificate = (
     string,
     { ip: string | null; userAgent: string | null }
   >();
+  const verificationByName = new Map<
+    string,
+    { method: string; verifiedAt: string } | null
+  >();
   for (const e of chain) {
     if (e.type !== "document.signed") continue;
     const d = e.data as {
@@ -609,6 +627,7 @@ const assembleCertificate = (
       consent?: unknown;
       ip?: unknown;
       userAgent?: unknown;
+      verification?: unknown;
     };
     if (typeof d.signer === "string") {
       consentByName.set(d.signer, d.consent === true);
@@ -616,6 +635,16 @@ const assembleCertificate = (
         ip: typeof d.ip === "string" ? d.ip : null,
         userAgent: typeof d.userAgent === "string" ? d.userAgent : null,
       });
+      const v = d.verification as
+        | { method?: unknown; verifiedAt?: unknown }
+        | null
+        | undefined;
+      verificationByName.set(
+        d.signer,
+        v && typeof v.method === "string" && typeof v.verifiedAt === "string"
+          ? { method: v.method, verifiedAt: v.verifiedAt }
+          : null,
+      );
     }
   }
   const completed = chain.find((e) => e.type === "document.completed");
@@ -635,6 +664,7 @@ const assembleCertificate = (
       consent: consentByName.get(s.name) ?? false,
       ip: actorByName.get(s.name)?.ip ?? null,
       userAgent: actorByName.get(s.name)?.userAgent ?? null,
+      verification: verificationByName.get(s.name) ?? null,
     })),
     events: chain.map((e) => ({
       type: e.type,
@@ -844,6 +874,8 @@ export interface CreateDraftInput {
   signers: DraftSignerInput[];
   /** "sequential" to require signing in order, else "parallel" (any order) */
   signingMode?: "parallel" | "sequential";
+  /** "email_otp" to require signers to verify by one-time code, else "none" */
+  verificationLevel?: "none" | "email_otp";
   /** pre-set fields (from a template); when omitted, fields are auto-detected */
   fields?: TemplateField[];
   /** workspace (organization) the document belongs to */
@@ -881,6 +913,8 @@ export const createDraft = async (
       manageToken,
       signingMode:
         input.signingMode === "sequential" ? "sequential" : "parallel",
+      verificationLevel:
+        input.verificationLevel === "email_otp" ? "email_otp" : "none",
       ownerId: input.ownerId ?? null,
       organizationId: input.organizationId ?? null,
       ownerEmail: input.ownerEmail ?? null,
@@ -1777,6 +1811,246 @@ export const verifySignerAccess = async (
   return "ok";
 };
 
+/** A signer's identity-verification state for a sign token */
+export interface VerificationState {
+  /** whether this signer must verify by one-time code before signing */
+  required: boolean;
+  /** whether this signer has already verified */
+  verified: boolean;
+  /** the signer's email, where a code is sent (null if none on file) */
+  email: string | null;
+  /** the signer's email, partially masked for display */
+  maskedEmail: string | null;
+  signerName: string;
+  /** whether this signer already signed (no verification needed) */
+  alreadySigned: boolean;
+  /** whether the whole document is complete */
+  completed: boolean;
+}
+
+/**
+ * Resolve a sign token to its identity-verification state. Verification is
+ * required only when the document asks for email OTP and the signer has an
+ * email to receive it; a signer who already signed, or a completed document,
+ * never needs to verify. Returns null for an unknown token.
+ */
+export const verificationStateFor = async (
+  db: Db,
+  signToken: string,
+): Promise<VerificationState | null> => {
+  const [row] = await db
+    .select({
+      verificationLevel: document.verificationLevel,
+      documentStatus: document.status,
+      email: signer.email,
+      signerName: signer.name,
+      signerStatus: signer.status,
+      otpVerifiedAt: signer.otpVerifiedAt,
+    })
+    .from(signer)
+    .innerJoin(document, eq(signer.documentId, document.id))
+    .where(eq(signer.signToken, signToken));
+  if (!row) return null;
+  const alreadySigned = row.signerStatus === "signed";
+  const completed = row.documentStatus === "completed";
+  const required =
+    row.verificationLevel === "email_otp" &&
+    Boolean(row.email) &&
+    !alreadySigned &&
+    !completed;
+  return {
+    required,
+    verified: row.otpVerifiedAt !== null,
+    email: row.email,
+    maskedEmail: row.email ? maskEmail(row.email) : null,
+    signerName: row.signerName,
+    alreadySigned,
+    completed,
+  };
+};
+
+export interface OtpIssueResult {
+  ok: boolean;
+  error?: "not_found" | "not_required" | "already_verified";
+  maskedEmail?: string | null;
+}
+
+/**
+ * Generate, store, and email a fresh one-time code to a signer, resetting the
+ * attempt counter. The plaintext code is emailed and never returned, so it
+ * cannot leak through the API or logs.
+ */
+const issueSignerOtp = async (
+  db: Db,
+  state: VerificationState,
+  signToken: string,
+  documentName: string,
+): Promise<void> => {
+  if (!state.email) return;
+  const code = generateOtpCode();
+  await db
+    .update(signer)
+    .set({
+      otpCodeHash: await hashOtpCode(code),
+      otpExpiresAt: new Date(Date.now() + OTP_TTL_MS),
+      otpAttempts: 0,
+    })
+    .where(eq(signer.signToken, signToken));
+  await sendOtpEmail({
+    to: state.email,
+    signerName: state.signerName,
+    documentName,
+    code,
+  });
+};
+
+/** The document name for a sign token, for the code email */
+const documentNameForToken = async (
+  db: Db,
+  signToken: string,
+): Promise<string> => {
+  const [row] = await db
+    .select({ name: document.name })
+    .from(signer)
+    .innerJoin(document, eq(signer.documentId, document.id))
+    .where(eq(signer.signToken, signToken));
+  return row?.name ?? "your document";
+};
+
+/**
+ * Ensure a signer has a live code to enter, sending one only when verification
+ * is required and no unexpired code is outstanding. Safe to call on every load
+ * of the verification screen without spamming the signer's inbox.
+ */
+export const ensureSignerOtp = async (
+  db: Db,
+  signToken: string,
+): Promise<OtpIssueResult> => {
+  const state = await verificationStateFor(db, signToken);
+  if (!state) return { ok: false, error: "not_found" };
+  if (!state.required) return { ok: false, error: "not_required" };
+  if (state.verified)
+    return {
+      ok: true,
+      error: "already_verified",
+      maskedEmail: state.maskedEmail,
+    };
+
+  const [row] = await db
+    .select({ otpExpiresAt: signer.otpExpiresAt })
+    .from(signer)
+    .where(eq(signer.signToken, signToken));
+  const hasLiveCode =
+    row?.otpExpiresAt != null && row.otpExpiresAt.getTime() > Date.now();
+  if (!hasLiveCode) {
+    await issueSignerOtp(
+      db,
+      state,
+      signToken,
+      await documentNameForToken(db, signToken),
+    );
+  }
+  return { ok: true, maskedEmail: state.maskedEmail };
+};
+
+/**
+ * Always issue a fresh code, for an explicit "resend" from the signer. Burns
+ * any outstanding code and resets the attempt counter.
+ */
+export const resendSignerOtp = async (
+  db: Db,
+  signToken: string,
+): Promise<OtpIssueResult> => {
+  const state = await verificationStateFor(db, signToken);
+  if (!state) return { ok: false, error: "not_found" };
+  if (!state.required) return { ok: false, error: "not_required" };
+  if (state.verified)
+    return {
+      ok: true,
+      error: "already_verified",
+      maskedEmail: state.maskedEmail,
+    };
+  await issueSignerOtp(
+    db,
+    state,
+    signToken,
+    await documentNameForToken(db, signToken),
+  );
+  return { ok: true, maskedEmail: state.maskedEmail };
+};
+
+export interface OtpVerifyResult {
+  ok: boolean;
+  error?:
+    | "not_found"
+    | "not_required"
+    | "no_code"
+    | "expired"
+    | "too_many_attempts"
+    | "invalid_code";
+}
+
+/**
+ * Check a submitted one-time code. On success the signer is marked verified
+ * (sticky) and an `identity.verified` event is written into the provenance
+ * chain, so the certificate can attest how the signer was identified. On a
+ * wrong code the attempt is counted and the code is burned after too many.
+ */
+export const verifySignerOtp = async (
+  db: Db,
+  signToken: string,
+  code: string,
+): Promise<OtpVerifyResult> => {
+  const state = await verificationStateFor(db, signToken);
+  if (!state) return { ok: false, error: "not_found" };
+  if (state.verified) return { ok: true };
+  if (!state.required) return { ok: false, error: "not_required" };
+
+  const [row] = await db
+    .select({
+      id: signer.id,
+      documentId: signer.documentId,
+      name: signer.name,
+      email: signer.email,
+      otpCodeHash: signer.otpCodeHash,
+      otpExpiresAt: signer.otpExpiresAt,
+      otpAttempts: signer.otpAttempts,
+    })
+    .from(signer)
+    .where(eq(signer.signToken, signToken));
+  if (!row?.otpCodeHash || !row.otpExpiresAt)
+    return { ok: false, error: "no_code" };
+  if (row.otpExpiresAt.getTime() <= Date.now())
+    return { ok: false, error: "expired" };
+  if (row.otpAttempts >= OTP_MAX_ATTEMPTS)
+    return { ok: false, error: "too_many_attempts" };
+
+  const matches = await verifyOtpCode((code ?? "").trim(), row.otpCodeHash);
+  if (!matches) {
+    await db
+      .update(signer)
+      .set({ otpAttempts: row.otpAttempts + 1 })
+      .where(eq(signer.id, row.id));
+    return { ok: false, error: "invalid_code" };
+  }
+
+  const verifiedAt = new Date();
+  await db
+    .update(signer)
+    .set({ otpVerifiedAt: verifiedAt, otpCodeHash: null, otpExpiresAt: null })
+    .where(eq(signer.id, row.id));
+  await appendProvenance(db, row.documentId, {
+    type: "identity.verified",
+    data: {
+      signer: row.name,
+      email: row.email ?? null,
+      method: "email_otp",
+      verifiedAt: verifiedAt.toISOString(),
+    },
+  });
+  return { ok: true };
+};
+
 /**
  * Everything the signer's fill overlay needs: the document, this signer's
  * fields, and the PDF. Records a view event the first time, like getSignerView.
@@ -1919,6 +2193,12 @@ export interface SignOptions {
    * provenance event and surfaced on the Certificate of Completion
    */
   actor?: { ip?: string | null; userAgent?: string | null };
+  /**
+   * the caller has already established the signer's identity out of band (e.g.
+   * an authenticated owner signing their own copy), so the email one-time-code
+   * gate is satisfied without a code
+   */
+  identityAssured?: boolean;
 }
 
 export const signByToken = async (
@@ -1960,6 +2240,17 @@ export const signByToken = async (
       );
     if (earlier.length > 0) return { ok: false, error: "out_of_order" };
   }
+
+  // identity assurance: when the document requires email verification, the
+  // signer must have proven their identity with a one-time code before any
+  // signature is accepted. Enforced server-side, never trusting the client gate
+  if (
+    doc.verificationLevel === "email_otp" &&
+    sgn.email &&
+    sgn.otpVerifiedAt === null &&
+    options?.identityAssured !== true
+  )
+    return { ok: false, error: "verification_required" };
 
   // ESIGN / UETA: the signer must affirmatively consent to sign electronically
   // before any signature is accepted. This is a hard gate, not a recorded flag:
@@ -2030,6 +2321,11 @@ export const signByToken = async (
       consent: true,
       ip: options?.actor?.ip ?? null,
       userAgent: options?.actor?.userAgent ?? null,
+      // how the signer's identity was assured, when the document required it
+      verification:
+        doc.verificationLevel === "email_otp" && sgn.otpVerifiedAt
+          ? { method: "email_otp", verifiedAt: sgn.otpVerifiedAt.toISOString() }
+          : null,
     },
   });
   emitSignatureCompleted({
