@@ -21,6 +21,8 @@ jobs:
         run: bun install
       - name: Check
         run: bun check
+      - name: Typecheck
+        run: bun tsc --noEmit
       - name: Knip
         run: bun knip
       - name: Run tests
