@@ -1,5 +1,15 @@
 # @omnidotdev/signet-api
 
+## 0.7.0
+
+### Minor Changes
+
+- [#102](https://github.com/omnidotdev/signet-api/pull/102) [`dcf0118`](https://github.com/omnidotdev/signet-api/commit/dcf0118905f9149836cf082ccd4ff93286b7897d) Thanks [@coopbri](https://github.com/coopbri)! - Sending a draft no longer emails the sender when they are one of the signers; the response says `signNow` so the app opens signing directly
+
+### Patch Changes
+
+- [#100](https://github.com/omnidotdev/signet-api/pull/100) [`d7c1765`](https://github.com/omnidotdev/signet-api/commit/d7c1765f725787b4220c5c88891e3ebe0b04f4c4) Thanks [@coopbri](https://github.com/coopbri)! - Detected signature boxes sit on the signing line with room for a full-size mark, date boxes match the document's text size, the date field is always the date signed (a signer cannot change it), and signers holding a live link are emailed when a request is voided, replaced, deleted, or declined by another signer
+
 ## 0.6.1
 
 ### Patch Changes
