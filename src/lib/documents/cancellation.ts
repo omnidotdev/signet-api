@@ -61,7 +61,7 @@ export const pendingCancellation = async (
     })
     .from(document)
     .where(eq(document.id, documentId));
-  if (!doc || doc.status !== "sent") {
+  if (doc?.status !== "sent") {
     return { documentName: doc?.name ?? "", recipients: [] };
   }
   const signers = await db
