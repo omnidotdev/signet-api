@@ -1,5 +1,6 @@
 import type { PDFFont } from "pdf-lib";
 import { PDFDocument, rgb, StandardFonts } from "pdf-lib";
+import { eventLabel } from "./eventLabel";
 
 /** One signer's outcome, as it appears on the certificate */
 export interface CertificateSigner {
@@ -47,20 +48,6 @@ const ACCENT = rgb(0.11, 0.18, 0.45);
 const MARGIN = 56;
 const PAGE_W = 612;
 const PAGE_H = 792;
-
-const EVENT_LABEL: Record<string, string> = {
-  "document.created": "Created",
-  "document.sent": "Sent for signature",
-  "document.viewed": "Opened by a signer",
-  "document.signed": "Signed",
-  "signature.completed": "Signed",
-  "document.completed": "Completed and sealed",
-  "document.declined": "Declined",
-  "document.voided": "Voided",
-};
-
-const labelFor = (type: string) =>
-  EVENT_LABEL[type] ?? type.replace(/^[a-z]+\./, "").replace(/[._]/g, " ");
 
 /** Format an ISO timestamp as a stable, human-readable UTC string */
 const fmt = (iso: string | null): string => {
@@ -265,8 +252,8 @@ export const buildCompletionCertificate = async (
   for (const e of data.events) {
     ensure(16);
     const label = e.signer
-      ? `${labelFor(e.type)} - ${e.signer}`
-      : labelFor(e.type);
+      ? `${eventLabel(e.type)} - ${e.signer}`
+      : eventLabel(e.type);
     text(fmt(e.timestamp), MARGIN, 9, font, MUTED);
     for (const line of wrap(label, 10, font, PAGE_W - 2 * MARGIN - 160).slice(
       0,
