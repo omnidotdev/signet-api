@@ -1,5 +1,11 @@
 # @omnidotdev/signet-api
 
+## 0.6.1
+
+### Patch Changes
+
+- [#97](https://github.com/omnidotdev/signet-api/pull/97) [`6eabd34`](https://github.com/omnidotdev/signet-api/commit/6eabd341b5b48d904cecfef29a32c969147fb47a) Thanks [@coopbri](https://github.com/coopbri)! - A new version of a document now also gets fields for blanks it has no field for yet (such as a date beside a signature line), each assigned to the signer whose signature is nearest
+
 ## 0.6.0
 
 ### Minor Changes
