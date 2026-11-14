@@ -93,6 +93,11 @@ to the signer whose signature is nearest. A document still out for
 signature is voided first; a completed one is kept unchanged as the record of
 what was signed.
 
+While a document is out for signature, its preview and each later signer's
+copy show the signatures collected so far. Only the sealed PDF, produced once
+everyone has signed, carries the digital signature. Downloads are named after
+the document (for example `Lease.pdf` and `Lease certificate.pdf`).
+
 When a request still out for signature is voided, replaced, deleted, or
 declined, each signer who was sent a link and has not signed is emailed that it
 was canceled.

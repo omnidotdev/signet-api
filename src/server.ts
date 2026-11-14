@@ -35,6 +35,8 @@ import {
   createMultiSignerRequest,
   declineByToken,
   deleteOwnedDocument,
+  documentName,
+  documentNameForSignToken,
   ensureSignerOtp,
   getDocumentDetailForOwner,
   getDocumentFileForOwner,
@@ -80,6 +82,7 @@ import { sendCancellationEmail } from "./lib/email/cancellationEmail.ts";
 import { sendCompletionEmail } from "./lib/email/completionEmail.ts";
 import { sendDeclineEmail } from "./lib/email/declineEmail.ts";
 import { sendSignatureRequestEmail } from "./lib/email/signatureRequestEmail.ts";
+import { contentDisposition, pdfFileName } from "./lib/http/downloadName.ts";
 import { parseSignersField } from "./lib/http/signersField.ts";
 import { runReminders } from "./lib/reminders/reminderJob.ts";
 import {
@@ -206,7 +209,7 @@ const pdfResponse = (
   new Response(bytes, {
     headers: {
       "content-type": "application/pdf",
-      "content-disposition": `${disposition}; filename="${filename}"`,
+      "content-disposition": contentDisposition(disposition, filename),
     },
   });
 
@@ -412,7 +415,7 @@ const app = new Elysia()
         reason: "Signed with Signet",
         passphrase: signer.passphrase,
       });
-      return pdfResponse(signed, "signed.pdf");
+      return pdfResponse(signed, pdfFileName(body.file.name));
     },
     {
       body: t.Object({
@@ -740,7 +743,7 @@ if (hasDb) {
       // Default to a download; an embedded in-app viewer requests ?disposition=inline
       return pdfResponse(
         file.bytes,
-        file.signed ? "signed.pdf" : "document.pdf",
+        pdfFileName(file.name),
         query.disposition === "inline" ? "inline" : "attachment",
       );
     })
@@ -880,7 +883,10 @@ if (hasDb) {
         set.status = 404;
         return { error: "not_found" };
       }
-      return pdfResponse(pdf, "certificate.pdf");
+      return pdfResponse(
+        pdf,
+        pdfFileName((await documentName(db, params.id)) ?? "", "certificate"),
+      );
     })
     // resend the signing reminder to pending signers (owner-scoped)
     .post(
@@ -1544,7 +1550,10 @@ if (hasDb) {
         set.status = 404;
         return { error: "not_available" };
       }
-      return pdfResponse(signed, "signed.pdf");
+      return pdfResponse(
+        signed,
+        pdfFileName((await documentNameForSignToken(db, params.token)) ?? ""),
+      );
     })
     // a signer downloads the Certificate of Completion for their document
     .get("/sign/:token/certificate", async ({ params, set }) => {
@@ -1553,7 +1562,13 @@ if (hasDb) {
         set.status = 404;
         return { error: "not_available" };
       }
-      return pdfResponse(pdf, "certificate.pdf");
+      return pdfResponse(
+        pdf,
+        pdfFileName(
+          (await documentNameForSignToken(db, params.token)) ?? "",
+          "certificate",
+        ),
+      );
     })
     // sender status (manage token)
     .get("/d/:id", async ({ params, query, set }) => {
@@ -1571,7 +1586,10 @@ if (hasDb) {
         set.status = 404;
         return { error: "not_available" };
       }
-      return pdfResponse(signed, "signed.pdf");
+      return pdfResponse(
+        signed,
+        pdfFileName((await documentName(db, params.id)) ?? ""),
+      );
     })
     // sender voids the request
     .post("/d/:id/void", async ({ params, query, set }) => {
@@ -1655,7 +1673,10 @@ if (hasDb) {
           set.status = 404;
           return { error: "not_available" };
         }
-        return pdfResponse(signed, "signed.pdf");
+        return pdfResponse(
+          signed,
+          pdfFileName((await documentName(db, params.id)) ?? ""),
+        );
       })
       // start a new draft from one of the owner's templates
       .post(
