@@ -97,6 +97,42 @@ const classifyBefore = (before: string): FieldType | null => {
 
 const ALL_UNDERSCORES = /_{3,}/g;
 
+/** How far below the text baseline an underscore stroke sits, per point of font size */
+const UNDERLINE_DROP = 0.2;
+
+/**
+ * Where a field box goes for a blank, following the usual e-sign layout: the
+ * box sits on the drawn line (just below the baseline, where the underscore
+ * stroke is). A signature or initials box rises into the clear space above the
+ * line, up to the nearest text overhead (a label such as "Name:"), so the mark
+ * can be drawn full size rather than squeezed into one text line. A date or
+ * text box is one line of the document's own text size.
+ */
+const fieldBox = (
+  type: FieldType,
+  blank: { x: number; width: number; baseline: number; fontSize: number },
+  items: TextItem[],
+): { y: number; height: number } => {
+  const { x, width, baseline, fontSize } = blank;
+  const y = baseline - fontSize * UNDERLINE_DROP;
+  if (type !== "signature" && type !== "initials") {
+    return { y, height: Math.max(fontSize * 1.3, 12) };
+  }
+  let ceiling = Number.POSITIVE_INFINITY;
+  for (const item of items) {
+    const itemY = item.transform[5] ?? 0;
+    const itemX = item.transform[4] ?? 0;
+    if (!item.str.trim() || itemY <= baseline + 1) continue;
+    // only text that actually overhangs the box
+    if (itemX >= x + width || itemX + item.width <= x) continue;
+    // stop short of that text's descenders
+    ceiling = Math.min(ceiling, itemY - (item.height || fontSize) * 0.25);
+  }
+  const room = Number.isFinite(ceiling) ? ceiling - y - 1 : fontSize * 2.4;
+  const height = Math.min(Math.max(room, fontSize * 1.6), fontSize * 3);
+  return { y, height };
+};
+
 /** Extract text items with positions for every page */
 const extractItems = async (
   pdf: Uint8Array,
@@ -160,7 +196,7 @@ export const detectFields = async (
         const str = item.str;
         const x = item.transform[4] ?? 0;
         const y = item.transform[5] ?? 0;
-        const height = Math.max(item.height || 12, 12);
+        const fontSize = item.height || 12;
         const charW = str.length > 0 ? item.width / str.length : 6;
 
         for (const run of str.matchAll(ALL_UNDERSCORES)) {
@@ -174,13 +210,14 @@ export const detectFields = async (
             classifyBefore(before) ??
             (blank.length >= 18 ? "signature" : labelToLeft(item, items));
           if (!type) continue;
+          const fx = x + idx * charW;
+          const width = Math.max(blank.length * charW, 80);
           fields.push({
             type,
             page,
-            x: x + idx * charW,
-            y,
-            width: Math.max(blank.length * charW, 80),
-            height,
+            x: fx,
+            width,
+            ...fieldBox(type, { x: fx, width, baseline: y, fontSize }, items),
           });
         }
       }

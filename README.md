@@ -84,6 +84,10 @@ to the signer whose signature is nearest. A document still out for
 signature is voided first; a completed one is kept unchanged as the record of
 what was signed.
 
+When a request still out for signature is voided, replaced, deleted, or
+declined, each signer who was sent a link and has not signed is emailed that it
+was canceled.
+
 ## Try it
 
 ```sh

@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { PDFDocument, StandardFonts } from "pdf-lib";
 import type { DetectedField } from "./detect.ts";
 import { detectFields, extractText } from "./detect.ts";
-import { initialsOf, stampFields } from "./stamp.ts";
+import { initialsOf, markSize, stampFields, textSize } from "./stamp.ts";
 
 /** Build a one-page PDF carrying signature and date anchors */
 const anchorPdf = async (): Promise<Uint8Array> => {
@@ -35,7 +35,48 @@ describe("field detection", () => {
     expect(signature?.page).toBe(1);
     // the signature field sits on the underscore run, to the right of the label
     expect((signature as DetectedField).x).toBeGreaterThan(72);
-    expect((signature as DetectedField).y).toBeCloseTo(200, 0);
+    // and its box sits on the drawn line, just below the text baseline
+    const sig = signature as DetectedField;
+    expect(sig.y).toBeLessThan(200);
+    expect(sig.y).toBeGreaterThan(196);
+  });
+
+  test("a signature box rises to the label above it; a date box is one text line", async () => {
+    // the common two-party block: a label line, then the signing line with a
+    // date blank on the same line
+    const doc = await PDFDocument.create();
+    const page = doc.addPage([612, 792]);
+    const font = await doc.embedFont(StandardFonts.TimesRoman);
+    page.drawText("MEMBER (President):", { x: 72, y: 512, size: 11, font });
+    page.drawText(
+      "________________________________________ Date: ______________",
+      { x: 72, y: 490, size: 11, font },
+    );
+    const fields = await detectFields(await doc.save());
+    const sig = fields.find((f) => f.type === "signature") as DetectedField;
+    const date = fields.find((f) => f.type === "date") as DetectedField;
+    // tall enough for a full-size mark, but clear of the label overhead
+    expect(sig.height).toBeGreaterThan(17);
+    expect(sig.y + sig.height).toBeLessThan(512 - 11 * 0.2);
+    // the date is one line of the document's text size, on the same line
+    expect(date.height).toBeGreaterThan(11);
+    expect(date.height).toBeLessThan(16);
+    expect(date.y).toBeCloseTo(sig.y, 1);
+  });
+
+  test("a signature line with nothing above gets a standard height", async () => {
+    const doc = await PDFDocument.create();
+    const page = doc.addPage([612, 792]);
+    const font = await doc.embedFont(StandardFonts.Helvetica);
+    page.drawText("______________________________", {
+      x: 72,
+      y: 700,
+      size: 12,
+      font,
+    });
+    const [sig] = await detectFields(await doc.save());
+    expect(sig?.type).toBe("signature");
+    expect(sig?.height).toBeCloseTo(12 * 2.4, 0);
   });
 
   test("returns no fields for a document with no anchors", async () => {
@@ -246,5 +287,19 @@ describe("initials", () => {
     expect(initialsOf("Ada Lovelace")).toBe("AL");
     expect(initialsOf("  grace   hopper ")).toBe("GH");
     expect(initialsOf("Cher")).toBe("C");
+  });
+});
+
+describe("stamp sizing", () => {
+  test("a mark fills a tall box but never shrinks below the one-line size", () => {
+    expect(markSize(12)).toBe(12);
+    expect(markSize(20)).toBe(15);
+    expect(markSize(35)).toBe(22);
+    expect(markSize(80)).toBe(22);
+  });
+
+  test("a date reads at body-copy size in a one-line box", () => {
+    expect(textSize(14.3)).toBeCloseTo(11.15, 1);
+    expect(textSize(40)).toBe(14);
   });
 });
