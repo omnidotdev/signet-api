@@ -17,6 +17,7 @@ import { formatDate } from "../fields/dateFormat.ts";
 import type { DetectedField } from "../fields/detect.ts";
 import { detectFields } from "../fields/detect.ts";
 import { signatureFontOrNull } from "../fields/signatureFonts.ts";
+import type { StampField } from "../fields/stamp.ts";
 import { initialsOf, stampFields } from "../fields/stamp.ts";
 import type { ProvenanceEvent } from "../provenance/ledger.ts";
 import { appendEvent, verifyLedger } from "../provenance/ledger.ts";
@@ -513,19 +514,106 @@ const ownerAccess = (ownerId: string, workspaceIds: string[]) => {
   return or(...access);
 };
 
+type FieldRow = typeof field.$inferSelect;
+type SignerRow = typeof signer.$inferSelect;
+
+/**
+ * What to draw for each field: its value, plus, on a signature or initials
+ * field, its signer's drawn image or handwriting style
+ */
+const toStampItems = (
+  fields: FieldRow[],
+  signers: SignerRow[],
+): StampField[] => {
+  const bySigner = new Map(signers.map((s) => [s.id, s]));
+  return fields.map((f) => {
+    const mark = f.type === "signature" || f.type === "initials";
+    const owner = mark && f.signerId ? bySigner.get(f.signerId) : undefined;
+    return {
+      type: f.type,
+      page: f.page,
+      x: f.x,
+      y: f.y,
+      width: f.width,
+      height: f.height,
+      value: f.value,
+      image: owner?.signatureImage ? fromBase64(owner.signatureImage) : null,
+      options: parseFieldOptions(f.options),
+      color: f.color,
+      font: owner?.signatureFont ?? null,
+    };
+  });
+};
+
+/**
+ * The original PDF with the fields of everyone who has signed so far drawn on,
+ * so the sender and later signers see progress before the document is sealed.
+ * This copy is for viewing only; the sealed PDF is the certified record
+ */
+const withSignaturesSoFar = async (
+  db: Db,
+  documentId: string,
+  original: Uint8Array,
+): Promise<Uint8Array> => {
+  const signers = await db
+    .select()
+    .from(signer)
+    .where(eq(signer.documentId, documentId));
+  const done = new Set(
+    signers.filter((s) => s.status === "signed").map((s) => s.id),
+  );
+  if (done.size === 0) return original;
+  const fields = await db
+    .select()
+    .from(field)
+    .where(eq(field.documentId, documentId));
+  const signedFields = fields.filter(
+    (f) => f.signerId !== null && done.has(f.signerId),
+  );
+  return stampFields(original, toStampItems(signedFields, signers));
+};
+
+/** The name of a document, for naming its downloads */
+export const documentName = async (
+  db: Db,
+  id: string,
+): Promise<string | null> => {
+  const [row] = await db
+    .select({ name: document.name })
+    .from(document)
+    .where(eq(document.id, id));
+  return row?.name ?? null;
+};
+
+/** The name of the document a sign token belongs to, for naming its downloads */
+export const documentNameForSignToken = async (
+  db: Db,
+  signToken: string,
+): Promise<string | null> => {
+  const [row] = await db
+    .select({ name: document.name })
+    .from(signer)
+    .innerJoin(document, eq(signer.documentId, document.id))
+    .where(eq(signer.signToken, signToken));
+  return row?.name ?? null;
+};
+
 /**
  * The document file for the owner (or a workspace member) at any stage: the
- * sealed PDF once signed, otherwise the original uploaded PDF, so a sender can
- * always open a document from their history. Null when not theirs.
+ * sealed PDF once signed, otherwise the original with the signatures collected
+ * so far, so a sender can always open a document from their history and see
+ * its progress. Null when not theirs.
  */
 export const getDocumentFileForOwner = async (
   db: Db,
   id: string,
   ownerId: string,
   workspaceIds: string[],
-): Promise<{ bytes: Uint8Array; signed: boolean } | null> => {
+): Promise<{ bytes: Uint8Array; signed: boolean; name: string } | null> => {
   const [doc] = await db
     .select({
+      id: document.id,
+      name: document.name,
       originalPdf: document.originalPdf,
       originalPdfKey: document.originalPdfKey,
       signedPdf: document.signedPdf,
@@ -540,11 +628,17 @@ export const getDocumentFileForOwner = async (
     return {
       bytes: await loadPdf(doc.signedPdf ?? "", doc.signedPdfKey),
       signed: true,
+      name: doc.name,
     };
   }
   return {
-    bytes: await loadPdf(doc.originalPdf, doc.originalPdfKey),
+    bytes: await withSignaturesSoFar(
+      db,
+      doc.id,
+      await loadPdf(doc.originalPdf, doc.originalPdfKey),
+    ),
     signed: false,
+    name: doc.name,
   };
 };
 
@@ -2340,8 +2434,13 @@ export const getSignerFillData = async (
     ...f,
     options: parseFieldOptions(f.options),
   }));
+  // earlier signers' signatures show, as they will on the sealed copy
   const pdfBase64 = toBase64(
-    await loadPdf(row.originalPdf, row.originalPdfKey),
+    await withSignaturesSoFar(
+      db,
+      row.documentId,
+      await loadPdf(row.originalPdf, row.originalPdfKey),
+    ),
   );
 
   return {
@@ -2570,31 +2669,7 @@ export const signByToken = async (
       .select()
       .from(field)
       .where(eq(field.documentId, doc.id));
-    // a signature/initials field uses its signer's drawn image when they drew one
-    const imageBySigner = new Map(signers.map((s) => [s.id, s.signatureImage]));
-    const fontBySigner = new Map(signers.map((s) => [s.id, s.signatureFont]));
-    const items = allFields.map((f) => {
-      const drawn =
-        (f.type === "signature" || f.type === "initials") && f.signerId
-          ? imageBySigner.get(f.signerId)
-          : null;
-      return {
-        type: f.type,
-        page: f.page,
-        x: f.x,
-        y: f.y,
-        width: f.width,
-        height: f.height,
-        value: f.value,
-        image: drawn ? fromBase64(drawn) : null,
-        options: parseFieldOptions(f.options),
-        color: f.color,
-        font:
-          (f.type === "signature" || f.type === "initials") && f.signerId
-            ? (fontBySigner.get(f.signerId) ?? null)
-            : null,
-      };
-    });
+    const items = toStampItems(allFields, signers);
     const original = await loadPdf(doc.originalPdf, doc.originalPdfKey);
     const stamped = await stampFields(original, items);
     const signed = await signPdf(stamped, serviceSigner.pkcs12, {
