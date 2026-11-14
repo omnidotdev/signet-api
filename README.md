@@ -47,6 +47,15 @@ minute (`429` with `Retry-After` beyond that). Keys are managed only from a
 signed-in session, never with a key, and can be revoked at any time; a revoked
 key stops working immediately. Only a hash of each key is stored.
 
+### Review before sending
+
+The app saves every upload as a draft first (`draft=true` on
+`POST /api/documents`) and opens it in the field editor, so the sender sees the
+document with each signer's fields before anyone is emailed. Sending the draft
+(`POST /api/documents/:id/send`) emails each signer whose turn it is, except the
+sender: when they are one of the signers, the response carries
+`"signNow": true` and they sign in the app instead.
+
 ### Templates and bulk send
 
 A template remembers its signer roles ("Signer 1", "Signer 2", ...) and every

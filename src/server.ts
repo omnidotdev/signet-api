@@ -66,6 +66,7 @@ import {
   voidDocument,
 } from "./lib/documents/documentService.ts";
 import { ensurePdf, UnsupportedUploadError } from "./lib/documents/ingest.ts";
+import { sendNotices } from "./lib/documents/sendNotices.ts";
 import { resolveMySignToken } from "./lib/documents/signAsMe.ts";
 import {
   BULK_SEND_MAX,
@@ -638,18 +639,19 @@ if (hasDb) {
         set.status = 404;
         return { ok: false };
       }
-      for (const s of result.signers) {
-        if (s.active && s.email) {
-          await sendSignatureRequestEmail({
-            to: s.email,
-            signerName: s.name,
-            documentName: result.documentName,
-            signUrl: `${appBaseUrl}/sign/${s.signToken}`,
-          });
-        }
+      const notices = sendNotices(result.signers, session.email);
+      for (const s of notices.email) {
+        await sendSignatureRequestEmail({
+          to: s.email,
+          signerName: s.name,
+          documentName: result.documentName,
+          signUrl: `${appBaseUrl}/sign/${s.signToken}`,
+        });
       }
       return {
         ok: true,
+        // the sender is a signer whose turn it is: the app opens signing now
+        signNow: notices.senderSignsNow,
         signers: result.signers.map((s) => ({
           name: s.name,
           signUrl: `${appBaseUrl}/sign/${s.signToken}`,
