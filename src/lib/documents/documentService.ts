@@ -30,6 +30,8 @@ import {
   signedKey,
   storePdf,
 } from "../storage/pdfStore.ts";
+import type { CanceledRecipient } from "./cancellation.ts";
+import { pendingCancellation } from "./cancellation.ts";
 import type { CertificateData } from "./certificate.ts";
 import { buildCompletionCertificate } from "./certificate.ts";
 import {
@@ -2501,12 +2503,12 @@ export const signByToken = async (
     const typed = options?.textValues?.[f.id];
     // text, checkbox, dropdown and radio fields carry the signer's own input
     // (free text, "true"/"" for a checkbox, or the chosen option); a date is
-    // editable but defaults to today; the rest derive from the adopted signature
+    // the date signed, set here and never taken from the signer, so it cannot
+    // be back- or forward-dated; the rest derive from the adopted signature
     let value: string;
     if (f.type === "date") {
-      // render the ISO date through the sender's chosen style (us/eu/long),
-      // leaving a signer's free-typed value untouched
-      value = formatDate(typed ?? f.value ?? dateStamp, f.dateFormat);
+      // render the signing date through the sender's chosen style
+      value = formatDate(dateStamp, f.dateFormat);
     } else if (
       f.type === "text" ||
       f.type === "checkbox" ||
@@ -2939,6 +2941,8 @@ export interface DeclineResult {
   documentName?: string;
   signerName?: string;
   ownerEmail?: string | null;
+  /** the other signers whose live links the decline voided */
+  canceled?: CanceledRecipient[];
 }
 
 /**
@@ -2970,6 +2974,12 @@ export const declineByToken = async (
     return { ok: false, error: "already_completed" };
   if (doc.status === "voided") return { ok: false, error: "voided" };
 
+  // the decline voids everyone else's link too, so note who to tell first
+  const { recipients: canceled } = await pendingCancellation(
+    db,
+    doc.id,
+    sgn.id,
+  );
   await db
     .update(signer)
     .set({ status: "declined" })
@@ -2988,6 +2998,7 @@ export const declineByToken = async (
     documentName: doc.name,
     signerName: sgn.name,
     ownerEmail: doc.ownerEmail,
+    canceled,
   };
 };
 

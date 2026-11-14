@@ -39,6 +39,25 @@ export interface StampField {
   font?: string | null;
 }
 
+/**
+ * Point size of a signature or initials mark in a box `height` points tall:
+ * large enough to fill the box like a real signature, never smaller than the
+ * single-line size older, shorter boxes always used. The signing page mirrors
+ * this (app `markFontSizeCqh`), so keep the two in lockstep
+ */
+export const markSize = (height: number): number =>
+  Math.max(Math.min(height, 14), Math.min(height * 0.75, 22));
+
+/** A handwriting face may rise at most this many box heights (its flourishes) */
+export const HANDWRITING_MAX_HEIGHT = 1.1;
+
+/**
+ * Point size of a date or text value in a box `height` points tall, close to
+ * body copy so a filled date reads like the document around it. Mirrored by the
+ * signing page (app `textFontSizeCqh`)
+ */
+export const textSize = (height: number): number => Math.min(height * 0.78, 14);
+
 /** The default ink every mark uses unless the sender picked a field color */
 export const DEFAULT_INK = rgb(0.11, 0.18, 0.45);
 
@@ -213,11 +232,17 @@ export const stampFields = async (
     const isMark = field.type === "signature" || field.type === "initials";
     const hand = isMark ? await handwriting(field.font, text) : null;
     const font = hand ?? (isMark ? await script() : await plain());
-    // a handwriting face is sized so its lowercase matches the classic
-    // signature's, then shrunk below if it would overrun the field's width
-    let size = Math.min(field.height, 14);
+    // a mark fills its box (a handwriting face sized so its lowercase matches
+    // the classic signature's); other text matches body copy. Either is then
+    // shrunk below if it would overrun the field's width
+    let size = isMark ? markSize(field.height) : textSize(field.height);
     const xHeightEm = hand ? await signatureFontXHeight(field.font) : null;
-    if (xHeightEm) size = handwritingSize(size, xHeightEm);
+    if (xHeightEm) {
+      size = Math.min(
+        handwritingSize(size, xHeightEm),
+        field.height * HANDWRITING_MAX_HEIGHT,
+      );
+    }
     while (size > 6 && font.widthOfTextAtSize(text, size) > field.width) {
       size -= 0.5;
     }

@@ -22,6 +22,7 @@ import {
   verifyTransaction,
 } from "./lib/auth/session.ts";
 import { getDb, runMigrations } from "./lib/db/client.ts";
+import { pendingCancellation } from "./lib/documents/cancellation.ts";
 import type { EditorField } from "./lib/documents/documentService.ts";
 import {
   addSignerForOwner,
@@ -74,6 +75,7 @@ import {
   saveTemplateFromDraft,
   saveTemplateFromOwnedDraft,
 } from "./lib/documents/templateService.ts";
+import { sendCancellationEmail } from "./lib/email/cancellationEmail.ts";
 import { sendCompletionEmail } from "./lib/email/completionEmail.ts";
 import { sendDeclineEmail } from "./lib/email/declineEmail.ts";
 import { sendSignatureRequestEmail } from "./lib/email/signatureRequestEmail.ts";
@@ -246,12 +248,39 @@ const notifyAfterSign = (result: Awaited<ReturnType<typeof signByToken>>) => {
   }
 };
 
+/**
+ * Tell each signer still holding a live link that the request was canceled, so
+ * a dead link in their inbox is never a surprise
+ */
+const notifyCanceled = (
+  pending: Awaited<ReturnType<typeof pendingCancellation>>,
+  reason: "withdrawn" | "declined",
+) => {
+  for (const r of pending.recipients) {
+    void sendCancellationEmail({
+      to: r.email,
+      signerName: r.name,
+      documentName: pending.documentName,
+      reason,
+    });
+  }
+};
+
 /** Notify the sender when a signer declines, shared by both decline flows */
 const notifyAfterDecline = (
   result: Awaited<ReturnType<typeof declineByToken>>,
   reason: string | null,
 ) => {
-  if (!result.ok || !result.ownerEmail) return;
+  if (!result.ok) return;
+  // the other signers' links died with the decline
+  notifyCanceled(
+    {
+      documentName: result.documentName ?? "",
+      recipients: result.canceled ?? [],
+    },
+    "declined",
+  );
+  if (!result.ownerEmail) return;
   void sendDeclineEmail({
     to: result.ownerEmail,
     documentName: result.documentName ?? "your document",
@@ -650,6 +679,7 @@ if (hasDb) {
           }
           throw e;
         }
+        const pending = await pendingCancellation(db, params.id);
         const result = await reviseOwnedDocument(db, {
           id: params.id,
           ownerId: session.sub,
@@ -660,6 +690,7 @@ if (hasDb) {
           set.status = result.error === "not_found" ? 404 : 409;
           return result;
         }
+        if (result.voidedPrevious) notifyCanceled(pending, "withdrawn");
         set.status = 201;
         return {
           ok: true,
@@ -1118,6 +1149,8 @@ if (hasDb) {
         set.status = 401;
         return { ok: false };
       }
+      // read who is waiting on it first: the delete removes the signers
+      const pending = await pendingCancellation(db, params.id);
       const ok = await deleteOwnedDocument(
         db,
         params.id,
@@ -1128,6 +1161,7 @@ if (hasDb) {
         set.status = 404;
         return { ok: false };
       }
+      notifyCanceled(pending, "withdrawn");
       return { ok: true };
     })
     // create a draft for the field-placement editor (one or more signers)
@@ -1539,11 +1573,13 @@ if (hasDb) {
     })
     // sender voids the request
     .post("/d/:id/void", async ({ params, query, set }) => {
+      const pending = await pendingCancellation(db, params.id);
       const ok = await voidDocument(db, params.id, query.token ?? "");
       if (!ok) {
         set.status = 404;
         return { ok: false };
       }
+      notifyCanceled(pending, "withdrawn");
       return { ok: true };
     });
 

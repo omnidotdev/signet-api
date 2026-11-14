@@ -192,6 +192,54 @@ describe("signer fill overlay", () => {
     expect(await extractText(signed as Uint8Array)).toContain("Acme Corp");
   });
 
+  test("a date field is the date signed, whatever the signer sends", async () => {
+    const draft = await createDraft(db, {
+      name: "Contract",
+      pdf: await blankPdf(),
+      signers: [{ name: "Ada" }],
+    });
+    const data = await import("./documentService.ts").then((m) =>
+      m.getEditorData(db, draft.id, draft.manageToken),
+    );
+    const signerId = data?.signers[0]?.id ?? null;
+    await saveFields(db, draft.id, draft.manageToken, [
+      {
+        signerId,
+        type: "signature",
+        page: 1,
+        x: 100,
+        y: 400,
+        width: 160,
+        height: 20,
+      },
+      {
+        signerId,
+        type: "date",
+        page: 1,
+        x: 100,
+        y: 350,
+        width: 120,
+        height: 14,
+      },
+    ]);
+    const sent = await sendDraft(db, draft.id, draft.manageToken);
+    const token = sent?.signers[0]?.signToken as string;
+    const fill = await getSignerFillData(db, token);
+    const dateField = fill?.fields.find((f) => f.type === "date");
+
+    const result = await signByToken(db, serviceSigner, token, "Ada Lovelace", {
+      // an attempt to backdate is ignored
+      textValues: dateField ? { [dateField.id]: "1999-01-01" } : {},
+      consent: true,
+    });
+    expect(result.ok).toBe(true);
+    const text = await extractText(
+      (await getSignedPdf(db, draft.id, draft.manageToken)) as Uint8Array,
+    );
+    expect(text).not.toContain("1999-01-01");
+    expect(text).toContain(new Date().toISOString().slice(0, 10));
+  });
+
   test("produces a certificate of completion only once completed", async () => {
     const draft = await createDraft(db, {
       name: "Contract",
