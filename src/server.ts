@@ -84,6 +84,7 @@ import {
   saveTemplateFromOwnedDraft,
 } from "./lib/documents/templateService.ts";
 import { sendCancellationEmail } from "./lib/email/cancellationEmail.ts";
+import type { CompletionFiles } from "./lib/email/completionEmail.ts";
 import { sendCompletionEmail } from "./lib/email/completionEmail.ts";
 import { sendDeclineEmail } from "./lib/email/declineEmail.ts";
 import { sendExpiredEmail } from "./lib/email/expiredEmail.ts";
@@ -229,15 +230,14 @@ const pdfResponse = (
  * signer flow and the in-app sign flow so both behave identically.
  */
 /**
- * Read a sender's expiry choice: whole days from 0 (never) to the maximum, or
- * undefined for the default
+ * Read a sender's expiry choice: whole days, 0 for never and capped at the
+ * maximum, or undefined (the default) when it is not a whole number
  */
 const parseExpiryDays = (raw: unknown): number | undefined => {
   if (raw === undefined || raw === null || raw === "") return undefined;
   const days = Number(raw);
-  if (!Number.isInteger(days) || days < 0 || days > MAX_EXPIRY_DAYS)
-    return undefined;
-  return days;
+  if (!Number.isInteger(days) || days < 0) return undefined;
+  return Math.min(days, MAX_EXPIRY_DAYS);
 };
 
 /**
@@ -288,7 +288,33 @@ const runExpiry = async (now: Date) => {
   }
 };
 
+/**
+ * The sealed PDF and certificate of a finished document, read once to attach to
+ * every completion email; null when they cannot be read (the emails then carry
+ * the link only)
+ */
+const completionFiles = async (
+  signToken: string | undefined,
+): Promise<CompletionFiles | null> => {
+  if (!signToken) return null;
+  try {
+    const db = getDb();
+    const signedPdf = await getSignedPdfForSignToken(db, signToken);
+    if (!signedPdf) return null;
+    const certificatePdf = await buildCertificateForToken(db, signToken).catch(
+      () => null,
+    );
+    return { signedPdf, certificatePdf };
+  } catch (err) {
+    console.warn("[signet] could not read the finished files to attach", err);
+    return null;
+  }
+};
+
 const notifyAfterSign = (result: Awaited<ReturnType<typeof signByToken>>) => {
+  const finished = result.completion
+    ? completionFiles(result.completion.signers[0]?.signToken)
+    : Promise.resolve(null);
   for (const notice of signNotices(result, appBaseUrl)) {
     switch (notice.kind) {
       case "request":
@@ -296,7 +322,7 @@ const notifyAfterSign = (result: Awaited<ReturnType<typeof signByToken>>) => {
           void sendSigningLink(result.documentId, notice.email);
         break;
       case "completion":
-        void sendCompletionEmail(notice.email);
+        void finished.then((files) => sendCompletionEmail(notice.email, files));
         break;
       case "receipt":
         void sendSignedReceiptEmail(notice.email);
@@ -346,7 +372,7 @@ const notifyAfterDecline = (
     documentName: result.documentName ?? "your document",
     signerName: result.signerName ?? "A signer",
     reason,
-    manageUrl: `${appBaseUrl}/documents`,
+    manageUrl: `${appBaseUrl}/documents${result.documentId ? `/${result.documentId}` : ""}`,
   });
 };
 
@@ -423,7 +449,16 @@ const app = new Elysia()
           : null,
     };
   })
-  .onBeforeHandle(({ session, set }) => {
+  .onBeforeHandle(({ session, headers, set }) => {
+    // a presented key that is unknown or revoked is refused outright, never
+    // treated as an anonymous request that could still send
+    if (
+      !session &&
+      headers.authorization?.toLowerCase().startsWith("bearer ")
+    ) {
+      set.status = 401;
+      return { ok: false, error: "invalid_api_key" };
+    }
     if (session?.apiKeyId && !apiKeyLimiter.take(session.apiKeyId)) {
       set.status = 429;
       set.headers["retry-after"] = "60";
