@@ -1,5 +1,15 @@
 # @omnidotdev/signet-api
 
+## 0.9.0
+
+### Minor Changes
+
+- [#110](https://github.com/omnidotdev/signet-api/pull/110) [`7840358`](https://github.com/omnidotdev/signet-api/commit/7840358ede5084de200c672e2c8407f023121701) Thanks [@coopbri](https://github.com/coopbri)! - The completion email now attaches the signed PDF and its Certificate of Completion, named after the document. If the files are too large to attach, the email goes out with the link only
+
+### Patch Changes
+
+- [#110](https://github.com/omnidotdev/signet-api/pull/110) [`7840358`](https://github.com/omnidotdev/signet-api/commit/7840358ede5084de200c672e2c8407f023121701) Thanks [@coopbri](https://github.com/coopbri)! - A request with an unknown or revoked API key is now refused with `401 invalid_api_key` instead of being handled as an anonymous send. An `expiresInDays` over 365 is capped at 365 instead of falling back to the default, and the decline email links straight to the document
+
 ## 0.8.0
 
 ### Minor Changes
