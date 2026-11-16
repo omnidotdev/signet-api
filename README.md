@@ -48,6 +48,15 @@ signed-in session, never with a key, and can be revoked at any time; a revoked
 key stops working immediately (a request with an unknown or revoked key gets
 `401 invalid_api_key`). Only a hash of each key is stored.
 
+### Sending without an account
+
+Without a key or session, `POST /api/documents` sends anonymously and returns
+`manageUrl` and a `manageToken`. Send the token in the `x-signet-manage-token`
+header to `GET /d/:id` (status), `GET /d/:id/signed`, and `POST /d/:id/void`.
+An anonymous draft (`POST /api/drafts`) opens in the editor at its `editUrl`,
+which asks for the token and submits it in the request body. The token never
+goes in a URL.
+
 ### Review before sending
 
 The app saves every upload as a draft first (`draft=true` on

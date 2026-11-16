@@ -229,6 +229,14 @@ const pdfResponse = (
  * Send the emails a signature sets off (see signNotices). Shared by the token
  * signer flow and the in-app sign flow so both behave identically.
  */
+/** The manage token of an anonymous sender, sent as a header (never a URL) */
+const manageTokenOf = (headers: Record<string, string | undefined>): string =>
+  headers["x-signet-manage-token"] ?? "";
+
+/** A small form that opens the editor by POSTing the manage token */
+const editorTokenPage = (id: string): string =>
+  `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Open the editor</title><body style="font:15px system-ui;max-width:28rem;margin:4rem auto;padding:0 1rem"><h1 style="font-size:1.3rem">Open the editor</h1><p>Enter the manage token you received when you created this draft.</p><form method="post" action="/d/${encodeURIComponent(id)}/edit"><input name="token" type="password" autocomplete="off" required style="width:100%;padding:.5rem;margin:.5rem 0"><button type="submit" style="padding:.5rem 1rem">Open</button></form></body>`;
+
 /**
  * Read a sender's expiry choice: whole days, 0 for never and capped at the
  * maximum, or undefined (the default) when it is not a whole number
@@ -718,7 +726,10 @@ if (hasDb) {
             name: s.name,
             signUrl: `${appBaseUrl}/sign/${s.signToken}`,
           })),
-          manageUrl: `${baseUrl}/d/${req.id}?token=${req.manageToken}`,
+          // the manage token goes in the x-signet-manage-token header of
+          // /d/:id requests, never in a URL
+          manageUrl: `${baseUrl}/d/${req.id}`,
+          manageToken: req.manageToken,
         };
       },
       {
@@ -1377,7 +1388,8 @@ if (hasDb) {
         set.status = 201;
         return {
           id: draft.id,
-          editUrl: `${baseUrl}/d/${draft.id}/edit?token=${draft.manageToken}`,
+          editUrl: `${baseUrl}/d/${draft.id}/edit`,
+          manageToken: draft.manageToken,
         };
       },
       {
@@ -1391,19 +1403,27 @@ if (hasDb) {
       },
     )
     // the field-placement editor
-    .get("/d/:id/edit", async ({ params, query }) => {
-      const data = await getEditorData(db, params.id, query.token ?? "");
-      if (!data) return html(notFoundPage());
-      return html(editorPage(data, query.token ?? ""));
-    })
+    // the field-placement editor opens from a POST carrying the manage token in
+    // the body, so the token never sits in a URL; a plain visit asks for it
+    .get("/d/:id/edit", ({ params }) => html(editorTokenPage(params.id)))
+    .post(
+      "/d/:id/edit",
+      async ({ params, body }) => {
+        const token = body.token ?? "";
+        const data = await getEditorData(db, params.id, token);
+        if (!data) return html(notFoundPage());
+        return html(editorPage(data, token));
+      },
+      { body: t.Object({ token: t.Optional(t.String()) }) },
+    )
     // save the editor's field set
     .post(
       "/d/:id/fields",
-      async ({ params, query, body, set }) => {
+      async ({ params, headers, body, set }) => {
         const ok = await saveFields(
           db,
           params.id,
-          query.token ?? "",
+          manageTokenOf(headers),
           body.fields,
         );
         if (!ok) {
@@ -1431,8 +1451,8 @@ if (hasDb) {
       },
     )
     // send a draft: mark sent and email each signer their link
-    .post("/d/:id/send", async ({ params, query, set }) => {
-      const result = await sendDraft(db, params.id, query.token ?? "");
+    .post("/d/:id/send", async ({ params, headers, set }) => {
+      const result = await sendDraft(db, params.id, manageTokenOf(headers));
       if (!result) {
         set.status = 404;
         return { ok: false };
@@ -1455,11 +1475,16 @@ if (hasDb) {
     // add a signer to a draft (draft only)
     .post(
       "/d/:id/signers",
-      async ({ params, query, body, set }) => {
-        const added = await addSignerToDraft(db, params.id, query.token ?? "", {
-          name: body.name,
-          email: body.email,
-        });
+      async ({ params, headers, body, set }) => {
+        const added = await addSignerToDraft(
+          db,
+          params.id,
+          manageTokenOf(headers),
+          {
+            name: body.name,
+            email: body.email,
+          },
+        );
         if (!added) {
           set.status = 400;
           return { ok: false, error: "not_a_draft_or_invalid" };
@@ -1471,11 +1496,11 @@ if (hasDb) {
     // update a draft signer's name/email (draft only)
     .patch(
       "/d/:id/signers/:signerId",
-      async ({ params, query, body, set }) => {
+      async ({ params, headers, body, set }) => {
         const ok = await updateDraftSigner(
           db,
           params.id,
-          query.token ?? "",
+          manageTokenOf(headers),
           params.signerId,
           { name: body.name, email: body.email },
         );
@@ -1493,11 +1518,11 @@ if (hasDb) {
       },
     )
     // remove a signer from a draft (draft only, never the last one)
-    .delete("/d/:id/signers/:signerId", async ({ params, query, set }) => {
+    .delete("/d/:id/signers/:signerId", async ({ params, headers, set }) => {
       const ok = await removeSignerFromDraft(
         db,
         params.id,
-        query.token ?? "",
+        manageTokenOf(headers),
         params.signerId,
       );
       if (!ok) {
@@ -1507,11 +1532,11 @@ if (hasDb) {
       return { ok: true };
     })
     // save the draft's document + field layout as a reusable template
-    .post("/d/:id/template", async ({ params, query, set }) => {
+    .post("/d/:id/template", async ({ params, headers, set }) => {
       const result = await saveTemplateFromDraft(
         db,
         params.id,
-        query.token ?? "",
+        manageTokenOf(headers),
       );
       if (!result) {
         set.status = 400;
@@ -1735,8 +1760,8 @@ if (hasDb) {
       );
     })
     // sender status (manage token)
-    .get("/d/:id", async ({ params, query, set }) => {
-      const status = await getStatus(db, params.id, query.token ?? "");
+    .get("/d/:id", async ({ params, headers, set }) => {
+      const status = await getStatus(db, params.id, manageTokenOf(headers));
       if (!status) {
         set.status = 404;
         return html(notFoundPage());
@@ -1744,8 +1769,8 @@ if (hasDb) {
       return status;
     })
     // sender downloads the signed document
-    .get("/d/:id/signed", async ({ params, query, set }) => {
-      const signed = await getSignedPdf(db, params.id, query.token ?? "");
+    .get("/d/:id/signed", async ({ params, headers, set }) => {
+      const signed = await getSignedPdf(db, params.id, manageTokenOf(headers));
       if (!signed) {
         set.status = 404;
         return { error: "not_available" };
@@ -1756,9 +1781,9 @@ if (hasDb) {
       );
     })
     // sender voids the request
-    .post("/d/:id/void", async ({ params, query, set }) => {
+    .post("/d/:id/void", async ({ params, headers, set }) => {
       const pending = await pendingCancellation(db, params.id);
-      const ok = await voidDocument(db, params.id, query.token ?? "");
+      const ok = await voidDocument(db, params.id, manageTokenOf(headers));
       if (!ok) {
         set.status = 404;
         return { ok: false };
@@ -1883,7 +1908,7 @@ if (hasDb) {
           return {
             ok: true,
             draftId: draft.id,
-            editUrl: `${baseUrl}/d/${draft.id}/edit?token=${draft.manageToken}`,
+            editUrl: `${appBaseUrl}/documents/${draft.id}/edit`,
           };
         },
         {

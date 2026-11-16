@@ -78,6 +78,21 @@ import * as pdfjs from "/assets/pdf/pdf.min.mjs";
 pdfjs.GlobalWorkerOptions.workerSrc = "/assets/pdf/pdf.worker.min.mjs";
 
 const DATA = JSON.parse(document.getElementById("editor-data").textContent);
+// the manage token travels in a header (and a POST body to reopen the page),
+// never in a URL where history and logs would keep it
+const TOKEN_HEADER = { "x-signet-manage-token": DATA.manageToken };
+const reopen = () => {
+  const form = document.createElement("form");
+  form.method = "post";
+  form.action = "/d/" + DATA.id + "/edit";
+  const input = document.createElement("input");
+  input.type = "hidden";
+  input.name = "token";
+  input.value = DATA.manageToken;
+  form.appendChild(input);
+  document.body.appendChild(form);
+  form.submit();
+};
 const statusEl = document.getElementById("editor-status");
 const b64ToBytes = (b64) => Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
 
@@ -193,8 +208,8 @@ for (const btn of document.querySelectorAll("[data-add]")) {
 async function save() {
   statusEl.textContent = "Saving...";
   const payload = fields.map(({ signerId, type, page, x, y, width, height }) => ({ signerId, type, page, x, y, width, height }));
-  const res = await fetch("/d/" + DATA.id + "/fields?token=" + encodeURIComponent(DATA.manageToken), {
-    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ fields: payload }),
+  const res = await fetch("/d/" + DATA.id + "/fields", {
+    method: "POST", headers: { ...TOKEN_HEADER, "content-type": "application/json" }, body: JSON.stringify({ fields: payload }),
   });
   statusEl.textContent = res.ok ? "Saved." : "Save failed.";
   return res.ok;
@@ -203,7 +218,7 @@ document.getElementById("save-btn").addEventListener("click", save);
 
 document.getElementById("tpl-btn").addEventListener("click", async () => {
   if (!(await save())) return;
-  const res = await fetch("/d/" + DATA.id + "/template?token=" + encodeURIComponent(DATA.manageToken), { method: "POST" });
+  const res = await fetch("/d/" + DATA.id + "/template", { method: "POST", headers: TOKEN_HEADER });
   const out = await res.json().catch(() => ({}));
   statusEl.textContent = res.ok ? "Saved as a template; find it on your dashboard." : (out.error === "sign_in_required" ? "Sign in to save templates." : "Could not save template.");
 });
@@ -211,7 +226,7 @@ document.getElementById("tpl-btn").addEventListener("click", async () => {
 document.getElementById("send-btn").addEventListener("click", async () => {
   if (!(await save())) return;
   statusEl.textContent = "Sending...";
-  const res = await fetch("/d/" + DATA.id + "/send?token=" + encodeURIComponent(DATA.manageToken), { method: "POST" });
+  const res = await fetch("/d/" + DATA.id + "/send", { method: "POST", headers: TOKEN_HEADER });
   if (!res.ok) { statusEl.textContent = "Send failed."; return; }
   const out = await res.json();
   const panel = document.getElementById("sent-panel");
@@ -235,8 +250,8 @@ function renderSigners() {
   for (const btn of list.querySelectorAll(".rm")) {
     btn.addEventListener("click", async () => {
       btn.disabled = true;
-      const res = await fetch("/d/" + DATA.id + "/signers/" + btn.dataset.id + "?token=" + encodeURIComponent(DATA.manageToken), { method: "DELETE" });
-      if (res.ok) location.reload(); else { btn.disabled = false; statusEl.textContent = "Could not remove signer."; }
+      const res = await fetch("/d/" + DATA.id + "/signers/" + btn.dataset.id, { method: "DELETE", headers: TOKEN_HEADER });
+      if (res.ok) reopen(); else { btn.disabled = false; statusEl.textContent = "Could not remove signer."; }
     });
   }
 }
@@ -247,8 +262,8 @@ document.getElementById("add-signer").addEventListener("submit", async (e) => {
   const fd = new FormData();
   fd.set("name", name);
   fd.set("email", document.getElementById("as-email").value.trim());
-  const res = await fetch("/d/" + DATA.id + "/signers?token=" + encodeURIComponent(DATA.manageToken), { method: "POST", body: fd });
-  if (res.ok) location.reload(); else statusEl.textContent = "Could not add signer.";
+  const res = await fetch("/d/" + DATA.id + "/signers", { method: "POST", headers: TOKEN_HEADER, body: fd });
+  if (res.ok) reopen(); else statusEl.textContent = "Could not add signer.";
 });
 renderSigners();
 
