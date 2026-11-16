@@ -69,7 +69,7 @@ export const SIGNER_COLORS = [
  * the row is written with the exact timestamp that was hashed so verification
  * reproduces the chain
  */
-const appendProvenance = async (
+export const appendProvenance = async (
   db: Db,
   documentId: string,
   input: { type: string; data: Record<string, unknown> },
@@ -104,7 +104,81 @@ const appendProvenance = async (
   });
 };
 
-export interface CreateSigningRequestInput {
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** How long a request stays open by default, in days; 0 never expires */
+const DEFAULT_EXPIRY_DAYS = Number(process.env.SIGNET_EXPIRY_DAYS ?? 120);
+/** The longest a request can stay open, in days */
+export const MAX_EXPIRY_DAYS = 365;
+/** The longest note a sender can attach to a request */
+export const MESSAGE_MAX_LENGTH = 1000;
+
+/** What a sender chooses when a document goes out for signature */
+export interface SendOptions {
+  /** a note from the sender, shown in each signing email */
+  message?: string | null;
+  /** days the request stays open (0 for never); defaults to SIGNET_EXPIRY_DAYS */
+  expiresInDays?: number | null;
+  /** the sender's display name, so signing emails say who sent them */
+  senderName?: string | null;
+}
+
+/** The document columns set when it goes out for signature */
+export const sendColumns = (now: Date, options?: SendOptions) => {
+  const days = options?.expiresInDays ?? DEFAULT_EXPIRY_DAYS;
+  const openDays =
+    Number.isFinite(days) && days > 0
+      ? Math.min(Math.floor(days), MAX_EXPIRY_DAYS)
+      : 0;
+  const senderName = options?.senderName?.trim();
+  return {
+    sentAt: now,
+    expiresAt:
+      openDays > 0 ? new Date(now.getTime() + openDays * DAY_MS) : null,
+    message: options?.message?.trim().slice(0, MESSAGE_MAX_LENGTH) || null,
+    ...(senderName ? { ownerName: senderName } : {}),
+  };
+};
+
+/** Who sent a document and what they asked, for the emails sent about it */
+export interface SigningEmailContext {
+  senderName: string | null;
+  senderEmail: string | null;
+  message: string | null;
+  expiresAt: Date | null;
+}
+
+export const signingEmailContext = async (
+  db: Db,
+  documentId: string,
+): Promise<SigningEmailContext> => {
+  const [row] = await db
+    .select({
+      senderName: document.ownerName,
+      senderEmail: document.ownerEmail,
+      message: document.message,
+      expiresAt: document.expiresAt,
+    })
+    .from(document)
+    .where(eq(document.id, documentId));
+  return (
+    row ?? {
+      senderName: null,
+      senderEmail: null,
+      message: null,
+      expiresAt: null,
+    }
+  );
+};
+
+/** Whether a request has passed its expiry, even before the sweep marks it */
+export const isPastExpiry = (
+  doc: { expiresAt: Date | null },
+  now = new Date(),
+): boolean =>
+  doc.expiresAt !== null && doc.expiresAt.getTime() <= now.getTime();
+
+export interface CreateSigningRequestInput extends SendOptions {
   name: string;
   pdf: Uint8Array;
   signerName: string;
@@ -139,6 +213,7 @@ export const createSigningRequest = async (
       id,
       name: input.name,
       status: "sent",
+      ...sendColumns(new Date(), input),
       contentHash,
       originalPdf: storedOriginal.inline,
       originalPdfKey: storedOriginal.key,
@@ -222,7 +297,7 @@ export interface DraftSignerInput {
   accessCode?: string;
 }
 
-export interface MultiSignerRequestInput {
+export interface MultiSignerRequestInput extends SendOptions {
   name: string;
   pdf: Uint8Array;
   signers: DraftSignerInput[];
@@ -318,6 +393,9 @@ export const createMultiSignerRequest = async (
       id,
       name: input.name,
       status: isDraft ? "draft" : "sent",
+      ...(isDraft
+        ? { ownerName: input.senderName?.trim() || null }
+        : sendColumns(new Date(), input)),
       contentHash,
       originalPdf: storedOriginal.inline,
       originalPdfKey: storedOriginal.key,
@@ -427,6 +505,7 @@ export const sendOwnedDraft = async (
   id: string,
   ownerId: string,
   workspaceIds: string[],
+  options?: SendOptions,
 ): Promise<SendResult | null> => {
   const access = [eq(document.ownerId, ownerId)];
   if (workspaceIds.length > 0) {
@@ -446,7 +525,7 @@ export const sendOwnedDraft = async (
   const now = new Date();
   await db
     .update(document)
-    .set({ status: "sent", sentAt: now, updatedAt: now })
+    .set({ status: "sent", ...sendColumns(now, options), updatedAt: now })
     .where(eq(document.id, id));
   await appendProvenance(db, id, { type: "document.sent", data: {} });
 
@@ -492,6 +571,10 @@ export interface DocumentDetail {
   createdAt: string;
   signingMode: string;
   hasSignedPdf: boolean;
+  /** when an unfinished request stops accepting signatures (ISO), else null */
+  expiresAt: string | null;
+  /** the sender's note to signers, if any */
+  message: string | null;
   signers: {
     id: string;
     name: string;
@@ -695,6 +778,8 @@ export const getDocumentDetailForOwner = async (
     createdAt: doc.createdAt.toISOString(),
     signingMode: doc.signingMode,
     hasSignedPdf: doc.signedPdf !== null || doc.signedPdfKey !== null,
+    expiresAt: doc.expiresAt?.toISOString() ?? null,
+    message: doc.message,
     signers: signers.map((s) => ({
       id: s.id,
       name: s.name,
@@ -1152,6 +1237,8 @@ export interface CreateDraftInput {
   pdf: Uint8Array;
   ownerId?: string;
   ownerEmail?: string;
+  /** the sender's display name, so signing emails say who sent them */
+  ownerName?: string;
   signers: DraftSignerInput[];
   /** "sequential" to require signing in order, else "parallel" (any order) */
   signingMode?: "parallel" | "sequential";
@@ -1199,6 +1286,7 @@ export const createDraft = async (
       ownerId: input.ownerId ?? null,
       organizationId: input.organizationId ?? null,
       ownerEmail: input.ownerEmail ?? null,
+      ownerName: input.ownerName?.trim() || null,
     })
     .returning({ id: document.id });
   if (!doc) throw new Error("failed to create document");
@@ -1545,6 +1633,7 @@ export const sendDraft = async (
   db: Db,
   id: string,
   manageToken: string,
+  options?: SendOptions,
 ): Promise<SendResult | null> => {
   const [doc] = await db
     .select({
@@ -1560,7 +1649,7 @@ export const sendDraft = async (
   const now = new Date();
   await db
     .update(document)
-    .set({ status: "sent", sentAt: now, updatedAt: now })
+    .set({ status: "sent", ...sendColumns(now, options), updatedAt: now })
     .where(eq(document.id, id));
   await appendProvenance(db, id, { type: "document.sent", data: {} });
 
@@ -2080,6 +2169,15 @@ export interface SignerFillData {
   documentCompleted: boolean;
   /** in sequential mode, the name of the signer who must sign first, else null */
   waitingFor: string | null;
+  /**
+   * why this signer can no longer sign: the request was canceled or expired.
+   * Null while it is open (or once they have signed)
+   */
+  closed: "voided" | "expired" | null;
+  /** the sender's note to signers, if any */
+  message: string | null;
+  /** when the request stops accepting signatures (ISO), null for never */
+  expiresAt: string | null;
   pdfBase64: string;
   fields: SignerFillField[];
 }
@@ -2371,6 +2469,8 @@ export const getSignerFillData = async (
       documentName: document.name,
       documentStatus: document.status,
       signingMode: document.signingMode,
+      expiresAt: document.expiresAt,
+      message: document.message,
       originalPdf: document.originalPdf,
       originalPdfKey: document.originalPdfKey,
       signerId: signer.id,
@@ -2402,7 +2502,12 @@ export const getSignerFillData = async (
   }
 
   // record a view only when it is this signer's turn
-  if (row.signerStatus === "pending" && !waitingFor) {
+  if (
+    row.signerStatus === "pending" &&
+    !waitingFor &&
+    row.documentStatus === "sent" &&
+    !isPastExpiry(row)
+  ) {
     await db
       .update(signer)
       .set({ status: "viewed" })
@@ -2451,6 +2556,17 @@ export const getSignerFillData = async (
       row.documentStatus === "completed" || row.signerStatus === "signed",
     documentCompleted: row.documentStatus === "completed",
     waitingFor,
+    closed:
+      row.signerStatus === "signed"
+        ? null
+        : row.documentStatus === "voided"
+          ? "voided"
+          : row.documentStatus === "expired" ||
+              (row.documentStatus === "sent" && isPastExpiry(row))
+            ? "expired"
+            : null,
+    message: row.message,
+    expiresAt: row.expiresAt?.toISOString() ?? null,
     pdfBase64,
     fields,
   };
@@ -2549,6 +2665,8 @@ export const signByToken = async (
     .where(eq(document.id, sgn.documentId));
   if (!doc) return { ok: false, error: "not_found" };
   if (doc.status === "voided") return { ok: false, error: "voided" };
+  if (doc.status === "expired" || (doc.status === "sent" && isPastExpiry(doc)))
+    return { ok: false, error: "expired" };
   if (doc.status === "draft") return { ok: false, error: "not_sent" };
 
   // sequential routing: an earlier-order signer must go first
@@ -3075,6 +3193,8 @@ export const declineByToken = async (
   if (doc.status === "completed")
     return { ok: false, error: "already_completed" };
   if (doc.status === "voided") return { ok: false, error: "voided" };
+  if (doc.status === "expired" || isPastExpiry(doc))
+    return { ok: false, error: "expired" };
 
   // the decline voids everyone else's link too, so note who to tell first
   const { recipients: canceled } = await pendingCancellation(

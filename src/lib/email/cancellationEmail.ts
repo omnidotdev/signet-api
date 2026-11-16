@@ -5,19 +5,28 @@ export interface CancellationEmail {
   to: string;
   signerName: string;
   documentName: string;
-  /** why: the sender withdrew it, or another signer declined */
-  reason: "withdrawn" | "declined";
+  /**
+   * why: the sender withdrew it, another signer declined, the sender removed
+   * this signer (or moved the request to another address), or it expired
+   */
+  reason: "withdrawn" | "declined" | "removed" | "expired";
 }
+
+const REASON_TEXT: Record<CancellationEmail["reason"], string> = {
+  withdrawn: "was canceled by the sender",
+  declined: "was canceled because another signer declined it",
+  removed: "is no longer addressed to you; the sender removed you from it",
+  expired: "expired before it was signed",
+};
 
 const renderBody = (input: CancellationEmail): string =>
   emailShell({
-    title: `Canceled: ${escapeHtml(input.documentName)}`,
-    heading: "This signature request was canceled",
-    body: `<p style="margin:0;">Hi ${escapeHtml(input.signerName)}, the request to sign <strong>${escapeHtml(input.documentName)}</strong> ${
-      input.reason === "declined"
-        ? "was canceled because another signer declined it"
-        : "was canceled by the sender"
-    }. The link in the earlier email no longer works, and there is nothing you need to do.</p>`,
+    title: `${input.reason === "expired" ? "Expired" : "Canceled"}: ${escapeHtml(input.documentName)}`,
+    heading:
+      input.reason === "expired"
+        ? "This signature request expired"
+        : "This signature request was canceled",
+    body: `<p style="margin:0;">Hi ${escapeHtml(input.signerName)}, the request to sign <strong>${escapeHtml(input.documentName)}</strong> ${REASON_TEXT[input.reason]}. The link in the earlier email no longer works, and there is nothing you need to do.</p>`,
     note: "If you were expecting to sign this, contact the sender.",
   });
 
@@ -32,7 +41,7 @@ export const sendCancellationEmail = async (
   try {
     await notifications.sendEmail({
       to: input.to,
-      subject: `Canceled: ${input.documentName}`,
+      subject: `${input.reason === "expired" ? "Expired" : "Canceled"}: ${input.documentName}`,
       body: renderBody(input),
       html: true,
     });

@@ -141,6 +141,13 @@
       "when": 1794559484536,
       "tag": "0019_steady_magma",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1794810473630,
+      "tag": "0020_flawless_bastion",
+      "breakpoints": true
     }
   ]
 }

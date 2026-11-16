@@ -226,6 +226,10 @@ export const BULK_SEND_MAX = 100;
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export interface BulkSendInput {
+  /** the sender's display name, for signing emails */
+  senderName?: string;
+  /** an optional note to every signer */
+  message?: string;
   templateId: string;
   ownerId: string;
   ownerEmail?: string;
@@ -291,6 +295,7 @@ export const bulkSendFromTemplate = async (
         draft.id,
         input.ownerId,
         input.workspaceIds,
+        { senderName: input.senderName, message: input.message },
       );
       if (!result) throw new Error("send failed");
       sent.push({ index, documentId: draft.id, ...result });
