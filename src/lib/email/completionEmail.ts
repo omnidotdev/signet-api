@@ -11,7 +11,7 @@ export interface CompletionEmail {
 
 const renderBody = (input: CompletionEmail): string =>
   emailShell({
-    title: `Signed: ${input.documentName}`,
+    title: `Signed: ${escapeHtml(input.documentName)}`,
     heading: "Signing complete",
     body: `<p style="margin:0;">Hi ${escapeHtml(input.recipientName)}, <strong>${escapeHtml(input.documentName)}</strong> has been signed by everyone.</p>`,
     button: { url: input.downloadUrl, label: "View signed document" },
