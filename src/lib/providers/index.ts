@@ -31,6 +31,25 @@ if (!VORTEX_API_URL || !VORTEX_API_KEY) {
   );
 }
 
+/** The bare address Signet sends from */
+const FROM_ADDRESS = (SIGNET_FROM_EMAIL ?? "signatures@send.omni.dev")
+  .replace(/^.*</, "")
+  .replace(/>.*$/, "")
+  .trim();
+
+/**
+ * A From header that shows a display name over Signet's address, e.g.
+ * "Ada Lovelace via Signet". Quotes, angle brackets, and line breaks are
+ * dropped from the name so it cannot alter the header
+ */
+export const fromAs = (displayName: string): string => {
+  const clean = displayName
+    .replace(/["<>\r\n\\]/g, "")
+    .trim()
+    .slice(0, 80);
+  return `${clean || "Signet"} <${FROM_ADDRESS}>`;
+};
+
 /**
  * Transactional email provider (Herald). Falls back to a noop provider that
  * logs to stdout when Herald is not configured, so send-for-signature still
@@ -42,7 +61,7 @@ export const notifications = createNotificationProvider(
         provider: "herald",
         apiUrl: HERALD_API_URL,
         apiKey: HERALD_API_KEY,
-        defaultFrom: SIGNET_FROM_EMAIL ?? "signatures@send.omni.dev",
+        defaultFrom: fromAs("Signet"),
       }
     : {},
 );

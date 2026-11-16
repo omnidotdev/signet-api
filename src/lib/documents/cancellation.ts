@@ -5,6 +5,7 @@ import { document, signer } from "../db/schema.ts";
 
 /** A signer to tell that a request they were sent no longer stands */
 export interface CanceledRecipient {
+  signerId: string;
   name: string;
   email: string;
 }
@@ -39,7 +40,7 @@ export const awaitingSigners = (
         s.status !== "declined" &&
         (!sequential || s === current || s.status === "viewed"),
     )
-    .map((s) => ({ name: s.name, email: s.email }));
+    .map((s) => ({ signerId: s.id, name: s.name, email: s.email }));
 };
 
 /**

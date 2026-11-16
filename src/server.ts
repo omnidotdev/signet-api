@@ -48,6 +48,8 @@ import {
   getSignerFillData,
   getStatus,
   listWorkspaceDocuments,
+  MAX_EXPIRY_DAYS,
+  MESSAGE_MAX_LENGTH,
   remindOwnedDocument,
   removePendingSignerFromSent,
   removeSignerForOwner,
@@ -60,6 +62,7 @@ import {
   sendDraft,
   sendOwnedDraft,
   signByToken,
+  signingEmailContext,
   updateDraftSigner,
   updateSignerForOwner,
   verificationStateFor,
@@ -67,6 +70,7 @@ import {
   verifySignerOtp,
   voidDocument,
 } from "./lib/documents/documentService.ts";
+import { expireDue, takeExpiringSoon } from "./lib/documents/expiry.ts";
 import { ensurePdf, UnsupportedUploadError } from "./lib/documents/ingest.ts";
 import { sendNotices } from "./lib/documents/sendNotices.ts";
 import { resolveMySignToken } from "./lib/documents/signAsMe.ts";
@@ -82,6 +86,8 @@ import {
 import { sendCancellationEmail } from "./lib/email/cancellationEmail.ts";
 import { sendCompletionEmail } from "./lib/email/completionEmail.ts";
 import { sendDeclineEmail } from "./lib/email/declineEmail.ts";
+import { sendExpiredEmail } from "./lib/email/expiredEmail.ts";
+import type { SignatureRequestEmail } from "./lib/email/signatureRequestEmail.ts";
 import { sendSignatureRequestEmail } from "./lib/email/signatureRequestEmail.ts";
 import {
   sendSignedReceiptEmail,
@@ -222,11 +228,72 @@ const pdfResponse = (
  * Send the emails a signature sets off (see signNotices). Shared by the token
  * signer flow and the in-app sign flow so both behave identically.
  */
+/**
+ * Read a sender's expiry choice: whole days from 0 (never) to the maximum, or
+ * undefined for the default
+ */
+const parseExpiryDays = (raw: unknown): number | undefined => {
+  if (raw === undefined || raw === null || raw === "") return undefined;
+  const days = Number(raw);
+  if (!Number.isInteger(days) || days < 0 || days > MAX_EXPIRY_DAYS)
+    return undefined;
+  return days;
+};
+
+/**
+ * Email a signer their link, adding who sent the document, their note, and the
+ * expiry, so every signing email (first send, reminder, or hand-off) matches
+ */
+const sendSigningLink = async (
+  documentId: string,
+  email: SignatureRequestEmail,
+): Promise<void> => {
+  const context = await signingEmailContext(getDb(), documentId).catch(
+    () => null,
+  );
+  await sendSignatureRequestEmail({ ...email, ...context });
+};
+
+/** Email each signer whose request expires soon, then each one that expired */
+const runExpiry = async (now: Date) => {
+  for (const doc of await takeExpiringSoon(getDb(), now)) {
+    for (const r of doc.recipients) {
+      await sendSigningLink(doc.documentId, {
+        to: r.email,
+        signerName: r.name,
+        documentName: doc.documentName,
+        signUrl: `${appBaseUrl}/sign/${r.signToken}`,
+        kind: "expiring",
+      });
+    }
+  }
+  for (const doc of await expireDue(getDb(), now)) {
+    for (const r of doc.recipients) {
+      void sendCancellationEmail({
+        to: r.email,
+        signerName: r.name,
+        documentName: doc.documentName,
+        reason: "expired",
+      });
+    }
+    if (doc.ownerEmail) {
+      void sendExpiredEmail({
+        to: doc.ownerEmail,
+        documentName: doc.documentName,
+        signed: doc.signed,
+        unsigned: doc.unsigned,
+        manageUrl: `${appBaseUrl}/documents/${doc.documentId}`,
+      });
+    }
+  }
+};
+
 const notifyAfterSign = (result: Awaited<ReturnType<typeof signByToken>>) => {
   for (const notice of signNotices(result, appBaseUrl)) {
     switch (notice.kind) {
       case "request":
-        void sendSignatureRequestEmail(notice.email);
+        if (result.documentId)
+          void sendSigningLink(result.documentId, notice.email);
         break;
       case "completion":
         void sendCompletionEmail(notice.email);
@@ -492,16 +559,23 @@ if (hasDb) {
 
   // periodically remind signers with a document waiting on them
   const reminderHours = Number(process.env.SIGNET_REMINDER_HOURS ?? 24);
-  if (reminderHours > 0) {
-    const intervalMs = reminderHours * 60 * 60 * 1000;
-    const sweep = () =>
-      runReminders(db, appBaseUrl, intervalMs, sendSignatureRequestEmail).catch(
-        (err) => console.warn("[signet] reminder sweep failed", err),
-      );
-    setInterval(sweep, 60 * 60 * 1000).unref();
-  } else {
+  if (reminderHours <= 0) {
     console.warn("SIGNET_REMINDER_HOURS=0, signer reminders disabled");
   }
+  const intervalMs = reminderHours * 60 * 60 * 1000;
+  // expire first, so nobody is reminded about a request that just expired
+  const sweep = async () => {
+    await runExpiry(new Date()).catch((err) =>
+      console.warn("[signet] expiry sweep failed", err),
+    );
+    if (reminderHours > 0) {
+      await runReminders(db, appBaseUrl, intervalMs, (email, documentId) =>
+        sendSigningLink(documentId, email),
+      ).catch((err) => console.warn("[signet] reminder sweep failed", err));
+    }
+  };
+  setInterval(sweep, 60 * 60 * 1000).unref();
+  setTimeout(sweep, 60 * 1000).unref();
 
   app
     // the signed-in sender's documents (scoped to their active workspace), so
@@ -566,6 +640,9 @@ if (hasDb) {
           ownerId: session?.sub,
           organizationId: session?.organizationId,
           ownerEmail: session?.email,
+          senderName: session?.name,
+          message: body.message,
+          expiresInDays: parseExpiryDays(body.expiresInDays),
         });
 
         // email each signer their link unless this is a draft; in sequential
@@ -575,7 +652,7 @@ if (hasDb) {
           const toNotify = sequential ? req.signers.slice(0, 1) : req.signers;
           for (const s of toNotify) {
             if (!s.email) continue;
-            await sendSignatureRequestEmail({
+            await sendSigningLink(req.id, {
               to: s.email,
               signerName: s.name,
               documentName,
@@ -612,44 +689,64 @@ if (hasDb) {
           verificationLevel: t.Optional(t.String()),
           // "true" to save as an unsent draft instead of sending now
           draft: t.Optional(t.String()),
+          // a note to signers, shown in each signing email
+          message: t.Optional(t.String({ maxLength: MESSAGE_MAX_LENGTH })),
+          // days until an unsigned request expires ("0" for never)
+          expiresInDays: t.Optional(t.Union([t.String(), t.Number()])),
         }),
       },
     )
     // send a draft the signed-in owner owns, returning each signer's link
-    .post("/api/documents/:id/send", async ({ params, session, set }) => {
-      if (!session) {
-        set.status = 401;
-        return { ok: false };
-      }
-      const result = await sendOwnedDraft(
-        db,
-        params.id,
-        session.sub,
-        (session.workspaces ?? []).map((w) => w.id),
-      );
-      if (!result) {
-        set.status = 404;
-        return { ok: false };
-      }
-      const notices = sendNotices(result.signers, session.email);
-      for (const s of notices.email) {
-        await sendSignatureRequestEmail({
-          to: s.email,
-          signerName: s.name,
-          documentName: result.documentName,
-          signUrl: `${appBaseUrl}/sign/${s.signToken}`,
-        });
-      }
-      return {
-        ok: true,
-        // the sender is a signer whose turn it is: the app opens signing now
-        signNow: notices.senderSignsNow,
-        signers: result.signers.map((s) => ({
-          name: s.name,
-          signUrl: `${appBaseUrl}/sign/${s.signToken}`,
-        })),
-      };
-    })
+    .post(
+      "/api/documents/:id/send",
+      async ({ params, session, body, set }) => {
+        if (!session) {
+          set.status = 401;
+          return { ok: false };
+        }
+        const result = await sendOwnedDraft(
+          db,
+          params.id,
+          session.sub,
+          (session.workspaces ?? []).map((w) => w.id),
+          {
+            senderName: session.name,
+            message: body?.message,
+            expiresInDays: parseExpiryDays(body?.expiresInDays),
+          },
+        );
+        if (!result) {
+          set.status = 404;
+          return { ok: false };
+        }
+        const notices = sendNotices(result.signers, session.email);
+        for (const s of notices.email) {
+          await sendSigningLink(params.id, {
+            to: s.email,
+            signerName: s.name,
+            documentName: result.documentName,
+            signUrl: `${appBaseUrl}/sign/${s.signToken}`,
+          });
+        }
+        return {
+          ok: true,
+          // the sender is a signer whose turn it is: the app opens signing now
+          signNow: notices.senderSignsNow,
+          signers: result.signers.map((s) => ({
+            name: s.name,
+            signUrl: `${appBaseUrl}/sign/${s.signToken}`,
+          })),
+        };
+      },
+      {
+        body: t.Optional(
+          t.Object({
+            message: t.Optional(t.String({ maxLength: MESSAGE_MAX_LENGTH })),
+            expiresInDays: t.Optional(t.Union([t.String(), t.Number()])),
+          }),
+        ),
+      },
+    )
     // start a new version of a document from a new file: the current version
     // is voided if it is still out for signature (a completed one stays sealed)
     // and a linked draft keeps its signers and layout for review before sending
@@ -901,11 +998,12 @@ if (hasDb) {
           return { ok: false };
         }
         for (const s of result.signers) {
-          void sendSignatureRequestEmail({
+          void sendSigningLink(params.id, {
             to: s.email,
             signerName: s.name,
             documentName: result.documentName,
             signUrl: `${appBaseUrl}/sign/${s.signToken}`,
+            kind: "reminder",
           });
         }
         return { ok: true, reminded: result.signers.length };
@@ -925,6 +1023,8 @@ if (hasDb) {
           body && typeof body === "object"
             ? (body as { name?: unknown; email?: unknown })
             : {};
+        // who holds a live link now, to tell an old address its link died
+        const before = await pendingCancellation(db, params.id);
         const result = await correctOwnedSigner(
           db,
           params.id,
@@ -945,9 +1045,24 @@ if (hasDb) {
           set.status = 404;
           return { ok: false };
         }
+        // a link moved to a new address: the old one is dead, so say so
+        const previous = result.reissued
+          ? before.recipients.find((r) => r.signerId === result.id)
+          : undefined;
+        if (
+          previous &&
+          previous.email.toLowerCase() !== (result.email ?? "").toLowerCase()
+        ) {
+          void sendCancellationEmail({
+            to: previous.email,
+            signerName: previous.name,
+            documentName: before.documentName,
+            reason: "removed",
+          });
+        }
         // a reissued link invalidates the old email, so send the fresh one
         if (result.reissued && result.email) {
-          void sendSignatureRequestEmail({
+          void sendSigningLink(params.id, {
             to: result.email,
             signerName: result.name,
             documentName: result.documentName,
@@ -997,7 +1112,7 @@ if (hasDb) {
           return { ok: false };
         }
         if (sentAdded.email) {
-          void sendSignatureRequestEmail({
+          void sendSigningLink(params.id, {
             to: sentAdded.email,
             signerName: sentAdded.name,
             documentName: sentAdded.documentName,
@@ -1047,6 +1162,8 @@ if (hasDb) {
           return { ok: false };
         }
         const workspaceIds = (session.workspaces ?? []).map((w) => w.id);
+        // read who holds a live link before the signer row is gone
+        const before = await pendingCancellation(db, params.id);
         const ok =
           (await removeSignerForOwner(
             db,
@@ -1065,6 +1182,17 @@ if (hasDb) {
         if (!ok) {
           set.status = 400;
           return { ok: false };
+        }
+        const removed = before.recipients.find(
+          (r) => r.signerId === params.signerId,
+        );
+        if (removed) {
+          void sendCancellationEmail({
+            to: removed.email,
+            signerName: removed.name,
+            documentName: before.documentName,
+            reason: "removed",
+          });
         }
         return { ok: true };
       },
@@ -1198,6 +1326,7 @@ if (hasDb) {
           ownerId: session?.sub,
           organizationId: session?.organizationId,
           ownerEmail: session?.email,
+          ownerName: session?.name,
         });
         set.status = 201;
         return {
@@ -1266,7 +1395,7 @@ if (hasDb) {
         const signUrl = `${appBaseUrl}/sign/${s.signToken}`;
         // in sequential mode only the active (first) signer is emailed now
         if (s.email && s.active) {
-          void sendSignatureRequestEmail({
+          void sendSigningLink(params.id, {
             to: s.email,
             signerName: s.name,
             documentName: result.documentName,
@@ -1797,6 +1926,8 @@ if (hasDb) {
             templateId: params.id,
             ownerId: session.sub,
             ownerEmail: session.email,
+            senderName: session.name,
+            message: body.message,
             organizationId: session.organizationId,
             workspaceIds: (session.workspaces ?? []).map((w) => w.id),
             rows: body.rows,
@@ -1808,7 +1939,7 @@ if (hasDb) {
           for (const doc of result.sent) {
             for (const s of doc.signers) {
               if (!s.active || !s.email) continue;
-              await sendSignatureRequestEmail({
+              await sendSigningLink(doc.documentId, {
                 to: s.email,
                 signerName: s.name,
                 documentName: doc.documentName,
@@ -1837,6 +1968,7 @@ if (hasDb) {
               }),
               { maxItems: BULK_SEND_MAX },
             ),
+            message: t.Optional(t.String({ maxLength: MESSAGE_MAX_LENGTH })),
           }),
         },
       )

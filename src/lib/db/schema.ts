@@ -55,6 +55,14 @@ export const document = pgTable("document", {
   organizationId: text("organization_id"),
   /** denormalized sender email for dashboard display */
   ownerEmail: text("owner_email"),
+  /** the sender's display name, so signing emails say who sent them */
+  ownerName: text("owner_name"),
+  /** an optional note from the sender, shown in each signing email */
+  message: text("message"),
+  /** when an unfinished request stops accepting signatures, null for never */
+  expiresAt: timestamp("expires_at", { withTimezone: true }),
+  /** when signers were warned the request is about to expire */
+  expiryWarnedAt: timestamp("expiry_warned_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),

@@ -11,6 +11,7 @@ import type { SignatureRequestEmail } from "../email/signatureRequestEmail.ts";
 
 export interface DueReminder {
   signerId: string;
+  documentId: string;
   email: string;
   name: string;
   signToken: string;
@@ -65,6 +66,7 @@ export const findDueReminders = async (
       if (baseline && baseline < cutoff) {
         due.push({
           signerId: s.signerId,
+          documentId: s.docId,
           email: s.email,
           name: s.name,
           signToken: s.signToken,
@@ -81,17 +83,21 @@ export const runReminders = async (
   db: Db,
   baseUrl: string,
   intervalMs: number,
-  send: (input: SignatureRequestEmail) => Promise<void>,
+  send: (input: SignatureRequestEmail, documentId: string) => Promise<void>,
 ): Promise<number> => {
   const due = await findDueReminders(db, new Date(), intervalMs);
   for (const reminder of due) {
     try {
-      await send({
-        to: reminder.email,
-        signerName: reminder.name,
-        documentName: reminder.documentName,
-        signUrl: `${baseUrl}/sign/${reminder.signToken}`,
-      });
+      await send(
+        {
+          to: reminder.email,
+          signerName: reminder.name,
+          documentName: reminder.documentName,
+          signUrl: `${baseUrl}/sign/${reminder.signToken}`,
+          kind: "reminder",
+        },
+        reminder.documentId,
+      );
       await db
         .update(signer)
         .set({ lastReminderAt: new Date() })

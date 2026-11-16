@@ -93,6 +93,17 @@ to the signer whose signature is nearest. A document still out for
 signature is voided first; a completed one is kept unchanged as the record of
 what was signed.
 
+Signing emails come from the sender by name ("Ada Lovelace via Signet"),
+replies go to the sender, and an optional note (`message`, up to 1000
+characters, on `POST /api/documents` or `POST /api/documents/:id/send`) is
+shown in each one. Signers who have not signed are reminded every
+`SIGNET_REMINDER_HOURS` (default 24). A request expires after
+`expiresInDays` (default `SIGNET_EXPIRY_DAYS`, 120; `0` for never, at most
+365): signers get a last reminder 3 days before, and on expiry it stops
+accepting signatures and the signers and sender are told. A signer removed
+from a request, or moved to another address, is told their link no longer
+works.
+
 Each signature sends email: until the last one, the signer gets a receipt
 and the sender hears who signed and who is left (in order, the next signer
 also gets their link). The last signature sends every signer and the sender
