@@ -571,6 +571,10 @@ export interface DocumentDetail {
   createdAt: string;
   signingMode: string;
   hasSignedPdf: boolean;
+  /** when an unfinished request stops accepting signatures (ISO), else null */
+  expiresAt: string | null;
+  /** the sender's note to signers, if any */
+  message: string | null;
   signers: {
     id: string;
     name: string;
@@ -774,6 +778,8 @@ export const getDocumentDetailForOwner = async (
     createdAt: doc.createdAt.toISOString(),
     signingMode: doc.signingMode,
     hasSignedPdf: doc.signedPdf !== null || doc.signedPdfKey !== null,
+    expiresAt: doc.expiresAt?.toISOString() ?? null,
+    message: doc.message,
     signers: signers.map((s) => ({
       id: s.id,
       name: s.name,
