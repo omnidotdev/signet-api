@@ -93,6 +93,11 @@ to the signer whose signature is nearest. A document still out for
 signature is voided first; a completed one is kept unchanged as the record of
 what was signed.
 
+Each signature sends email: until the last one, the signer gets a receipt
+and the sender hears who signed and who is left (in order, the next signer
+also gets their link). The last signature sends every signer and the sender
+the finished document.
+
 While a document is out for signature, its preview and each later signer's
 copy show the signatures collected so far. Only the sealed PDF, produced once
 everyone has signed, carries the digital signature. Downloads are named after

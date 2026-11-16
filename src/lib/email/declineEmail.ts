@@ -13,7 +13,7 @@ export interface DeclineEmail {
 
 const renderBody = (input: DeclineEmail): string =>
   emailShell({
-    title: `Declined: ${input.documentName}`,
+    title: `Declined: ${escapeHtml(input.documentName)}`,
     heading: "A signer declined",
     body:
       `<p style="margin:0;"><strong>${escapeHtml(input.signerName)}</strong> declined to sign <strong>${escapeHtml(input.documentName)}</strong>, so it has been voided and can no longer be signed.</p>` +

@@ -70,6 +70,7 @@ import {
 import { ensurePdf, UnsupportedUploadError } from "./lib/documents/ingest.ts";
 import { sendNotices } from "./lib/documents/sendNotices.ts";
 import { resolveMySignToken } from "./lib/documents/signAsMe.ts";
+import { signNotices } from "./lib/documents/signNotices.ts";
 import {
   BULK_SEND_MAX,
   bulkSendFromTemplate,
@@ -82,6 +83,10 @@ import { sendCancellationEmail } from "./lib/email/cancellationEmail.ts";
 import { sendCompletionEmail } from "./lib/email/completionEmail.ts";
 import { sendDeclineEmail } from "./lib/email/declineEmail.ts";
 import { sendSignatureRequestEmail } from "./lib/email/signatureRequestEmail.ts";
+import {
+  sendSignedReceiptEmail,
+  sendSignerProgressEmail,
+} from "./lib/email/signProgressEmail.ts";
 import { contentDisposition, pdfFileName } from "./lib/http/downloadName.ts";
 import { parseSignersField } from "./lib/http/signersField.ts";
 import { runReminders } from "./lib/reminders/reminderJob.ts";
@@ -214,40 +219,24 @@ const pdfResponse = (
   });
 
 /**
- * Side-effect emails after a signature lands: hand off to the next signer in a
- * sequential flow, and on completion tell every party (and the sender) the
- * document is finished. Shared by the token signer flow and the in-app sign
- * flow so both behave identically.
+ * Send the emails a signature sets off (see signNotices). Shared by the token
+ * signer flow and the in-app sign flow so both behave identically.
  */
 const notifyAfterSign = (result: Awaited<ReturnType<typeof signByToken>>) => {
-  if (!result.ok) return;
-  if (result.notifySigner?.email) {
-    void sendSignatureRequestEmail({
-      to: result.notifySigner.email,
-      signerName: result.notifySigner.name,
-      documentName: result.notifySigner.documentName,
-      signUrl: `${appBaseUrl}/sign/${result.notifySigner.signToken}`,
-    });
-  }
-  if (result.completion) {
-    const { documentName, ownerEmail, signers } = result.completion;
-    for (const s of signers) {
-      if (!s.email) continue;
-      void sendCompletionEmail({
-        to: s.email,
-        recipientName: s.name,
-        documentName,
-        downloadUrl: `${appBaseUrl}/sign/${s.signToken}`,
-      });
-    }
-    // the sender, when they are not themselves a signer we already emailed
-    if (ownerEmail && !signers.some((s) => s.email === ownerEmail)) {
-      void sendCompletionEmail({
-        to: ownerEmail,
-        recipientName: "there",
-        documentName,
-        downloadUrl: `${appBaseUrl}/documents`,
-      });
+  for (const notice of signNotices(result, appBaseUrl)) {
+    switch (notice.kind) {
+      case "request":
+        void sendSignatureRequestEmail(notice.email);
+        break;
+      case "completion":
+        void sendCompletionEmail(notice.email);
+        break;
+      case "receipt":
+        void sendSignedReceiptEmail(notice.email);
+        break;
+      case "progress":
+        void sendSignerProgressEmail(notice.email);
+        break;
     }
   }
 };

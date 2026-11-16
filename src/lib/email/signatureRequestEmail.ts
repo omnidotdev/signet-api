@@ -10,7 +10,7 @@ export interface SignatureRequestEmail {
 
 const renderBody = (input: SignatureRequestEmail): string =>
   emailShell({
-    title: `Signature requested: ${input.documentName}`,
+    title: `Signature requested: ${escapeHtml(input.documentName)}`,
     heading: "You have a document to sign",
     body: `<p style="margin:0;">Hi ${escapeHtml(input.signerName)}, <strong>${escapeHtml(input.documentName)}</strong> is ready for your signature.</p>`,
     button: { url: input.signUrl, label: "Review and sign" },

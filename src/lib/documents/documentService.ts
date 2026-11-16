@@ -2474,6 +2474,14 @@ export interface SignResult {
     ownerEmail: string | null;
     signers: { name: string; email: string | null; signToken: string }[];
   };
+  /** present when others still have to sign: who signed, and who is left */
+  progress?: {
+    documentName: string;
+    ownerEmail: string | null;
+    signer: { name: string; email: string | null; signToken: string };
+    /** the signers still to sign, in signing order */
+    waitingOn: string[];
+  };
   error?: string;
 }
 
@@ -2742,7 +2750,26 @@ export const signByToken = async (
       }
     : undefined;
 
-  return { ok: true, documentId: doc.id, completed, notifySigner, completion };
+  const progress: SignResult["progress"] = completed
+    ? undefined
+    : {
+        documentName: doc.name,
+        ownerEmail: doc.ownerEmail,
+        signer: { name: sgn.name, email: sgn.email, signToken: sgn.signToken },
+        waitingOn: signers
+          .filter((s) => s.status !== "signed")
+          .sort((a, b) => a.orderIndex - b.orderIndex)
+          .map((s) => s.name),
+      };
+
+  return {
+    ok: true,
+    documentId: doc.id,
+    completed,
+    notifySigner,
+    completion,
+    progress,
+  };
 };
 
 export interface DocumentStatus {
