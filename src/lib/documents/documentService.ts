@@ -3158,6 +3158,7 @@ export const getSignedPdfForOwner = async (
 export interface DeclineResult {
   ok: boolean;
   error?: string;
+  documentId?: string;
   documentName?: string;
   signerName?: string;
   ownerEmail?: string | null;
@@ -3217,6 +3218,7 @@ export const declineByToken = async (
   emitDocumentVoided({ documentId: doc.id, ownerId: doc.ownerId });
   return {
     ok: true,
+    documentId: doc.id,
     documentName: doc.name,
     signerName: sgn.name,
     ownerEmail: doc.ownerEmail,

@@ -45,7 +45,8 @@ then, and works on the same routes as the signed-in app (create and send
 documents, templates, status, downloads). Each key is limited to 120 requests a
 minute (`429` with `Retry-After` beyond that). Keys are managed only from a
 signed-in session, never with a key, and can be revoked at any time; a revoked
-key stops working immediately. Only a hash of each key is stored.
+key stops working immediately (a request with an unknown or revoked key gets
+`401 invalid_api_key`). Only a hash of each key is stored.
 
 ### Review before sending
 
@@ -93,13 +94,14 @@ to the signer whose signature is nearest. A document still out for
 signature is voided first; a completed one is kept unchanged as the record of
 what was signed.
 
-Signing emails come from the sender by name ("Ada Lovelace via Signet"),
+Signing emails sent from the app come from the sender by name ("Ada
+Lovelace via Signet"),
 replies go to the sender, and an optional note (`message`, up to 1000
 characters, on `POST /api/documents` or `POST /api/documents/:id/send`) is
 shown in each one. Signers who have not signed are reminded every
 `SIGNET_REMINDER_HOURS` (default 24). A request expires after
-`expiresInDays` (default `SIGNET_EXPIRY_DAYS`, 120; `0` for never, at most
-365): signers get a last reminder 3 days before, and on expiry it stops
+`expiresInDays` (default `SIGNET_EXPIRY_DAYS`, 120; `0` for never; longer
+than 365 is capped at 365): signers get a last reminder 3 days before, and on expiry it stops
 accepting signatures and the signers and sender are told. A signer removed
 from a request, or moved to another address, is told their link no longer
 works.
@@ -107,7 +109,8 @@ works.
 Each signature sends email: until the last one, the signer gets a receipt
 and the sender hears who signed and who is left (in order, the next signer
 also gets their link). The last signature sends every signer and the sender
-the finished document.
+the finished document, with the signed PDF and its Certificate of Completion
+attached (or the link alone if the files are too large to attach).
 
 While a document is out for signature, its preview and each later signer's
 copy show the signatures collected so far. Only the sealed PDF, produced once
