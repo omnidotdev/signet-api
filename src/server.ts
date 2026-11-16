@@ -352,6 +352,16 @@ const notifyAfterDecline = (
 
 const SERVICE_KEY = process.env.SIGNET_SERVICE_KEY;
 
+/** The sender's display name from the app proxy, sent URL-encoded */
+const decodeHeaderName = (raw: string | undefined): string | undefined => {
+  if (!raw) return undefined;
+  try {
+    return decodeURIComponent(raw).trim().slice(0, 200) || undefined;
+  } catch {
+    return undefined;
+  }
+};
+
 // each managed API key gets its own request budget so one integration cannot
 // flood the service
 const API_KEY_RATE_LIMIT = Number(process.env.SIGNET_API_KEY_RATE_LIMIT ?? 120);
@@ -398,6 +408,7 @@ const app = new Elysia()
       const session: Session = {
         sub: ownerId,
         email: headers["x-signet-owner-email"] ?? "",
+        name: decodeHeaderName(headers["x-signet-owner-name"]),
         organizationId,
         workspaces: organizationId ? [{ id: organizationId }] : undefined,
       };
