@@ -9,10 +9,11 @@
  * ledger and (later) an RFC-3161 timestamp remain the tamper-evidence layer.
  *
  * Usage:
- *   bun run src/scripts/generateSigningCa.ts <out-dir> [--root-key <pem>]
+ *   bun run src/scripts/generateSigningCa.ts <out-dir> [--root-key <pem> --root-cert <pem>]
  *
- * Pass --root-key to re-issue the Signet leaf under an EXISTING root (so the
- * published root keeps validating); omit it to mint a fresh root. Outputs, in
+ * Pass --root-key and --root-cert to re-issue the Signet leaf under the
+ * EXISTING root: the published root certificate is reused as is, so it keeps
+ * validating every signature. Omit both to mint a fresh root. Outputs, in
  * <out-dir>:
  *   omni-signing-root-ca.pem      (PUBLIC - publish this; verifiers trust it)
  *   omni-signing-root-ca-key.pem  (SECRET - store in Pulumi/Bitwarden to re-issue)
@@ -41,46 +42,59 @@ const notAfter = (years: number): Date => {
 };
 
 const main = () => {
-  const [outDir, flag, rootKeyPath] = process.argv.slice(2);
-  if (!outDir) {
-    console.error("usage: generateSigningCa.ts <out-dir> [--root-key <pem>]");
-    process.exit(1);
-  }
-
-  // Root CA: reuse an existing key when re-issuing, else mint a fresh one
-  let rootPrivateKey: forge.pki.rsa.PrivateKey;
-  let rootPublicKey: forge.pki.rsa.PublicKey;
-  if (flag === "--root-key" && rootKeyPath) {
-    rootPrivateKey = forge.pki.privateKeyFromPem(
-      readFileSync(rootKeyPath, "utf8"),
-    ) as forge.pki.rsa.PrivateKey;
-    rootPublicKey = forge.pki.setRsaPublicKey(
-      rootPrivateKey.n,
-      rootPrivateKey.e,
+  const [outDir, ...flags] = process.argv.slice(2);
+  const arg = (name: string) => {
+    const i = flags.indexOf(name);
+    return i >= 0 ? flags[i + 1] : undefined;
+  };
+  const rootKeyPath = arg("--root-key");
+  const rootCertPath = arg("--root-cert");
+  if (!outDir || Boolean(rootKeyPath) !== Boolean(rootCertPath)) {
+    console.error(
+      "usage: generateSigningCa.ts <out-dir> [--root-key <pem> --root-cert <pem>]",
     );
-  } else {
-    const keys = forge.pki.rsa.generateKeyPair(4096);
-    rootPrivateKey = keys.privateKey;
-    rootPublicKey = keys.publicKey;
+    process.exit(1);
   }
 
   const rootAttrs = [
     { name: "commonName", value: ROOT_CN },
     { name: "organizationName", value: ROOT_O },
   ];
-  const rootCert = forge.pki.createCertificate();
-  rootCert.publicKey = rootPublicKey;
-  rootCert.serialNumber = serial();
-  rootCert.validity.notBefore = new Date();
-  rootCert.validity.notAfter = notAfter(ROOT_YEARS);
-  rootCert.setSubject(rootAttrs);
-  rootCert.setIssuer(rootAttrs);
-  rootCert.setExtensions([
-    { name: "basicConstraints", cA: true, critical: true },
-    { name: "keyUsage", critical: true, keyCertSign: true, cRLSign: true },
-    { name: "subjectKeyIdentifier" },
-  ]);
-  rootCert.sign(rootPrivateKey, forge.md.sha256.create());
+
+  // Root CA: reuse the existing key AND certificate when re-issuing (a new
+  // root certificate would not match the published one), else mint both
+  let rootPrivateKey: forge.pki.rsa.PrivateKey;
+  let rootCert: forge.pki.Certificate;
+  if (rootKeyPath && rootCertPath) {
+    rootPrivateKey = forge.pki.privateKeyFromPem(
+      readFileSync(rootKeyPath, "utf8"),
+    ) as forge.pki.rsa.PrivateKey;
+    rootCert = forge.pki.certificateFromPem(readFileSync(rootCertPath, "utf8"));
+    const certKey = rootCert.publicKey as forge.pki.rsa.PublicKey;
+    if (
+      certKey.n.compareTo(rootPrivateKey.n) !== 0 ||
+      certKey.e.compareTo(rootPrivateKey.e) !== 0
+    ) {
+      console.error("the root key does not belong to the root certificate");
+      process.exit(1);
+    }
+  } else {
+    const keys = forge.pki.rsa.generateKeyPair(4096);
+    rootPrivateKey = keys.privateKey;
+    rootCert = forge.pki.createCertificate();
+    rootCert.publicKey = keys.publicKey;
+    rootCert.serialNumber = serial();
+    rootCert.validity.notBefore = new Date();
+    rootCert.validity.notAfter = notAfter(ROOT_YEARS);
+    rootCert.setSubject(rootAttrs);
+    rootCert.setIssuer(rootAttrs);
+    rootCert.setExtensions([
+      { name: "basicConstraints", cA: true, critical: true },
+      { name: "keyUsage", critical: true, keyCertSign: true, cRLSign: true },
+      { name: "subjectKeyIdentifier" },
+    ]);
+    rootCert.sign(rootPrivateKey, forge.md.sha256.create());
+  }
 
   // Signet leaf: signed by the root, usable only for signing documents
   const leafKeys = forge.pki.rsa.generateKeyPair(2048);
@@ -93,7 +107,7 @@ const main = () => {
     { name: "commonName", value: LEAF_CN },
     { name: "organizationName", value: LEAF_O },
   ]);
-  leafCert.setIssuer(rootAttrs);
+  leafCert.setIssuer(rootCert.subject.attributes);
   leafCert.setExtensions([
     { name: "basicConstraints", cA: false, critical: true },
     {
@@ -103,7 +117,12 @@ const main = () => {
       nonRepudiation: true,
     },
     { name: "extKeyUsage", emailProtection: true },
-    { name: "authorityKeyIdentifier", keyIdentifier: true },
+    // the issuer's key, so verifiers can find the root: `keyIdentifier: true`
+    // would hash this certificate's own key and break the chain
+    {
+      name: "authorityKeyIdentifier",
+      keyIdentifier: rootCert.generateSubjectKeyIdentifier().getBytes(),
+    },
     { name: "subjectKeyIdentifier" },
   ]);
   leafCert.sign(rootPrivateKey, forge.md.sha256.create());
