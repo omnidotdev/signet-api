@@ -1,5 +1,11 @@
 # @omnidotdev/signet-api
 
+## 0.9.1
+
+### Patch Changes
+
+- [#112](https://github.com/omnidotdev/signet-api/pull/112) [`a20b300`](https://github.com/omnidotdev/signet-api/commit/a20b30006fed23a702aee258aec077e31b21607b) Thanks [@coopbri](https://github.com/coopbri)! - Signatures now chain to the published Omni Signing Root CA, so a verifier that trusts the root reports the certificate as trusted (the signer certificate named the wrong issuer key). The manage token of an anonymous send is no longer put in URLs: it is returned as `manageToken` and sent in the `x-signet-manage-token` header, and the draft editor opens by submitting it in the request body
+
 ## 0.9.0
 
 ### Minor Changes
