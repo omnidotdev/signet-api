@@ -1,5 +1,19 @@
 # @omnidotdev/signet-api
 
+## 0.8.0
+
+### Minor Changes
+
+- [#109](https://github.com/omnidotdev/signet-api/pull/109) [`eb0f027`](https://github.com/omnidotdev/signet-api/commit/eb0f027d6c1625cdc994c6f210ebcd6edf87527f) Thanks [@coopbri](https://github.com/coopbri)! - Signing emails now come from the sender by name, replies reach the sender, and the sender can add a note to signers. Reminders are labeled as reminders. Requests expire (120 days by default, adjustable or off), with a last reminder 3 days before and an email to signers and the sender on expiry. A signer removed from a request, or moved to another address, is told their link no longer works. An expired or canceled link now says so up front instead of failing at signing
+
+- [#108](https://github.com/omnidotdev/signet-api/pull/108) [`76b292f`](https://github.com/omnidotdev/signet-api/commit/76b292f0953ad91710c1b170cdd0ff241c4d906b) Thanks [@coopbri](https://github.com/coopbri)! - Each signature on a document that others still have to sign now sends email: the signer gets a receipt, and the sender hears who signed and who is left. The sender's completion email links straight to the document
+
+- [#106](https://github.com/omnidotdev/signet-api/pull/106) [`7e40983`](https://github.com/omnidotdev/signet-api/commit/7e40983938b04107c6e7d44d4b1de9f172de0ad1) Thanks [@coopbri](https://github.com/coopbri)! - While a document is out for signature, its preview (and each later signer's copy) shows the signatures collected so far. Downloads are named after the document as shown in the app (for example "Lease.pdf" and "Lease certificate.pdf") instead of generic names
+
+### Patch Changes
+
+- [#104](https://github.com/omnidotdev/signet-api/pull/104) [`6a26801`](https://github.com/omnidotdev/signet-api/commit/6a26801290b8c4300af6e13d83c90b716e316c34) Thanks [@coopbri](https://github.com/coopbri)! - The Certificate of Completion now labels identity checks, new versions, and signer changes, and shows any other event in sentence case instead of its raw lowercase name
+
 ## 0.7.0
 
 ### Minor Changes
