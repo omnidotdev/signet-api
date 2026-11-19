@@ -1,4 +1,4 @@
-FROM oven/bun:1.4.4
+FROM oven/bun:1.4.5
 
 # LibreOffice (headless) converts uploaded DOCX documents to PDF before signing.
 # The Writer component alone is far smaller than the full suite, and the
