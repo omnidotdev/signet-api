@@ -1,5 +1,15 @@
 # @omnidotdev/signet-api
 
+## 0.10.0
+
+### Minor Changes
+
+- [#116](https://github.com/omnidotdev/signet-api/pull/116) [`198fd05`](https://github.com/omnidotdev/signet-api/commit/198fd057d3ee32201288582e802f3b5191236e26) Thanks [@coopbri](https://github.com/coopbri)! - Deleting a workspace now deletes its Signet documents, with their signers, fields, audit trails, and stored PDFs, and the API keys scoped to it. Signers still holding a live link are told the request was canceled. Templates and saved signatures belong to a person's account and stay
+
+### Patch Changes
+
+- [#114](https://github.com/omnidotdev/signet-api/pull/114) [`8b0ce5b`](https://github.com/omnidotdev/signet-api/commit/8b0ce5bd5c7c97d0ab8182da56f8281fcbf3fc89) Thanks [@coopbri](https://github.com/coopbri)! - Stop writing email addresses to the logs. Email sends now log only the recipient count and message id, by moving to `@omnidotdev/providers` v0.2.0.
+
 ## 0.9.1
 
 ### Patch Changes
