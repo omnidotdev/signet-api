@@ -130,6 +130,12 @@ When a request still out for signature is voided, replaced, deleted, or
 declined, each signer who was sent a link and has not signed is emailed that it
 was canceled.
 
+Deleting a workspace deletes its documents the same way, with their signers,
+fields, audit trails, and stored PDFs, and the API keys scoped to it (Gatekeeper
+`organization.deleted`, delivered by Vortex to `POST /webhooks/idp` and signed
+with `IDP_WEBHOOK_SECRET`). Templates and saved signatures belong to a person's
+account, not a workspace, and stay.
+
 ## Try it
 
 ```sh
