@@ -96,6 +96,7 @@ import {
 } from "./lib/email/signProgressEmail.ts";
 import { contentDisposition, pdfFileName } from "./lib/http/downloadName.ts";
 import { parseSignersField } from "./lib/http/signersField.ts";
+import { createIdpWebhookRoutes } from "./lib/idp/webhooks.ts";
 import { runReminders } from "./lib/reminders/reminderJob.ts";
 import {
   getUserSignature,
@@ -185,6 +186,12 @@ if (hasDb) {
 } else {
   console.warn(
     "DATABASE_URL not set, send-for-signature disabled (quick-sign still works)",
+  );
+}
+const IDP_WEBHOOK_SECRET = process.env.IDP_WEBHOOK_SECRET;
+if (hasDb && !IDP_WEBHOOK_SECRET) {
+  console.warn(
+    "IDP_WEBHOOK_SECRET not set, deleting a workspace's documents on workspace deletion disabled",
   );
 }
 if (!authEnabled) {
@@ -494,6 +501,19 @@ const app = new Elysia()
           "cache-control": "public, max-age=86400",
         },
       }),
+  )
+  // Gatekeeper identity events (a deleted workspace's documents go with it)
+  .use(
+    hasDb
+      ? createIdpWebhookRoutes({
+          getDb,
+          webhookSecret: IDP_WEBHOOK_SECRET,
+          notifyCanceled: (canceled) => {
+            for (const pending of canceled)
+              notifyCanceled(pending, "withdrawn");
+          },
+        })
+      : new Elysia(),
   )
   .get("/assets/pdf/pdf.min.mjs", () => js(PDFJS_MAIN))
   .get("/assets/pdf/pdf.worker.min.mjs", () => js(PDFJS_WORKER))
