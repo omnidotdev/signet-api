@@ -23,7 +23,7 @@
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1071.0",
-    "@omnidotdev/providers": "github:omnidotdev/providers#4f5bee0d0fc44368a27e558d750f3ffeb68aba67",
+    "@omnidotdev/providers": "github:omnidotdev/providers#2d5675d0376d24f5e6f9abd911a7579ee4f41b26",
     "@pdf-lib/fontkit": "1.1.1",
     "@signpdf/placeholder-pdf-lib": "4.0.0",
     "@signpdf/signer-p12": "4.0.0",
